@@ -100,7 +100,11 @@ async function initApiKey() {
     return;
   }
 
-  updateKeyStatusUI(false, "미설정 (자체 스마트 텍스트 분석기 사용)");
+  if (geminiApiKey) {
+    updateKeyStatusUI(true, "기본 API 키 등록됨 (정상 작동)");
+  } else {
+    updateKeyStatusUI(false, "미설정 (자체 스마트 텍스트 분석기 사용)");
+  }
 }
 
 function updateKeyStatusUI(isSet, message) {
@@ -262,84 +266,191 @@ function analyzeDocumentStructure(pageTexts) {
   };
 }
 
-// Search actual body pages using question keywords and question numbers
-// This solves the problem: "No page numbers in TOC" & "No cover page" & "Arbitrary format"
+// Search actual body pages using question brackets 【1】, 【2】 and keywords
+// High-Precision Title-to-Page Scoring Engine
+// Matches question titles against actual PDF page body text using:
+// 1. Clean No-Space Substring match (1000 pts)
+// 2. Top-of-page header area weighting (+500 pts)
+// 3. Significant phrase / token overlap ratio (+150~450 pts)
+// 4. Bracketed question number pattern (+300 pts)
+// 5. Sequential monotonicity constraint (page N >= page N-1)
 function locateQuestionsByContent(items, pdfDoc, pageTexts, detectedTocPages) {
   if (!items || items.length === 0) return [];
 
   const lastToc = (detectedTocPages && detectedTocPages.length > 0) ? Math.max(...detectedTocPages) : 0;
-  const searchStart = Math.max(1, lastToc + 1);
+  // Exclude TOC and cover pages from body search
+  let searchStart = Math.max(1, lastToc + 1);
+
+  // Skip any nearly blank transition pages
+  while (searchStart <= pdfDoc.numPages && (pageTexts[searchStart - 1]?.text || "").replace(/[^가-힣a-zA-Z0-9]/g, '').length < 15) {
+    searchStart++;
+  }
+
+  // 1. Pre-process and cache normalized text for all pages
+  const pageCache = [];
+  for (let p = 1; p <= pdfDoc.numPages; p++) {
+    const rawText = pageTexts[p - 1]?.text || "";
+    // Clean string with all whitespace, brackets, punctuation removed
+    const cleanNoSpace = rawText.replace(/[\s\(\)\[\]\.\,\?\!\-_·ㆍ•「」『』<>\/\\~○●■▶◆\:\;]/g, '');
+    // Header snippet (first 600 characters) where question title boxes reside
+    const headerRaw = rawText.substring(0, 600);
+    const headerCleanNoSpace = headerRaw.replace(/[\s\(\)\[\]\.\,\?\!\-_·ㆍ•「」『』<>\/\\~○●■▶◆\:\;]/g, '');
+
+    pageCache.push({
+      pageNum: p,
+      rawText: rawText,
+      cleanNoSpace: cleanNoSpace,
+      headerCleanNoSpace: headerCleanNoSpace
+    });
+  }
+
+  // Common stopwords to exclude from token overlap
+  const stopWords = new Set([
+    "현황은", "사유는", "대책은", "계획은", "의견은", "방안은", 
+    "최근", "대한", "관련", "따른", "기준", "운영", "지원", 
+    "내역은", "이유는", "결과는", "사업", "추진", "어떠한가", "무엇인가"
+  ]);
 
   const locatedItems = [];
   let prevFoundPage = searchStart;
 
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
-    let foundPage = null;
+    const qId = Number(item.id) || (i + 1);
+    const originalTitle = (item.title || "").trim();
 
-    // 1. Clean Title Keyword (First 8~16 non-space characters)
-    const titleClean = (item.title || "").replace(/[\s\(\)\[\]\.\,\?\!\-_·]/g, '');
-    const titleKeyword = titleClean.substring(0, Math.min(14, titleClean.length));
+    // Clean title with no whitespace and no punctuation
+    const titleNoSpace = originalTitle.replace(/[\s\(\)\[\]\.\,\?\!\-_·ㆍ•「」『』<>\/\\~○●■▶◆\:\;]/g, '');
 
-    // 2. Question Number Search Pattern: "[문항 1]", "문항 1", "1."
-    const qNumPattern = new RegExp(`\\[\\s*문항\\s*${item.id}\\s*\\]|문항\\s*${item.id}\\b|질의\\s*${item.id}\\b|^\\s*${item.id}\\s*[\\.\\)]`, 'i');
+    // Title token words (length >= 2, non-stopwords)
+    const titleTokens = originalTitle
+      .replace(/[\s\(\)\[\]\.\,\?\!\-_·ㆍ•「」『』<>\/\\~○●■▶◆\:\;]/g, ' ')
+      .split(' ')
+      .filter(w => w.length >= 2 && !stopWords.has(w));
 
-    // Search forward from previous found page
-    for (let p = prevFoundPage; p <= pdfDoc.numPages; p++) {
-      const pText = pageTexts[p - 1]?.text || "";
-      const pTextClean = pText.replace(/[\s\(\)\[\]\.\,\?\!\-_·]/g, '');
+    // Salient prefix phrase (first 8~12 chars)
+    const prefixSnippet = titleNoSpace.length >= 8 
+      ? titleNoSpace.substring(0, Math.min(12, titleNoSpace.length)) 
+      : titleNoSpace;
+    const midSnippet = titleNoSpace.length >= 16 
+      ? titleNoSpace.substring(4, 14) 
+      : "";
 
-      const matchKeyword = (titleKeyword.length >= 4 && pTextClean.includes(titleKeyword));
-      const matchQNum = qNumPattern.test(pText);
+    // Bracket patterns for question number
+    const bracketRegex = new RegExp(`【\\s*${qId}\\s*】|\\[\\s*문항\\s*${qId}\\s*\\]|【\\s*문항\\s*${qId}\\s*】|\\b문항\\s*${qId}\\b`, 'i');
 
-      if (matchKeyword || matchQNum) {
-        foundPage = p;
+    let bestPage = null;
+    let highestScore = 0;
+
+    // Search sequentially from previous found page to guarantee monotonicity
+    const pageSearchStart = Math.max(searchStart, prevFoundPage);
+
+    for (let p = pageSearchStart; p <= pdfDoc.numPages; p++) {
+      const pageInfo = pageCache[p - 1];
+      if (!pageInfo || pageInfo.cleanNoSpace.length < 20) continue;
+
+      let score = 0;
+
+      // Tier 1: Complete title match (ignoring whitespace and punctuation)
+      if (titleNoSpace.length >= 5 && pageInfo.cleanNoSpace.includes(titleNoSpace)) {
+        score += 1000;
+        // Strong bonus if title is in the top header area (first 600 chars)
+        if (pageInfo.headerCleanNoSpace.includes(titleNoSpace)) {
+          score += 500;
+        }
+      }
+
+      // Tier 2: Salient prefix phrase match (first 8~12 characters)
+      if (prefixSnippet.length >= 6 && pageInfo.cleanNoSpace.includes(prefixSnippet)) {
+        score += 400;
+        if (pageInfo.headerCleanNoSpace.includes(prefixSnippet)) {
+          score += 300;
+        }
+      }
+
+      // Tier 3: Middle salient phrase match
+      if (midSnippet.length >= 6 && pageInfo.cleanNoSpace.includes(midSnippet)) {
+        score += 250;
+      }
+
+      // Tier 4: Significant token overlap
+      if (titleTokens.length > 0) {
+        let matchCount = 0;
+        let headerMatchCount = 0;
+        for (const token of titleTokens) {
+          if (pageInfo.cleanNoSpace.includes(token)) {
+            matchCount++;
+            if (pageInfo.headerCleanNoSpace.includes(token)) {
+              headerMatchCount++;
+            }
+          }
+        }
+
+        const matchRatio = matchCount / titleTokens.length;
+        if (matchRatio >= 0.8) score += 400;
+        else if (matchRatio >= 0.5) score += 250;
+        else if (matchRatio >= 0.3 && matchCount >= 2) score += 120;
+
+        score += headerMatchCount * 50;
+      }
+
+      // Tier 5: Bracketed question number match
+      if (bracketRegex.test(pageInfo.rawText)) {
+        score += 300;
+      }
+
+      // Track highest scoring page
+      if (score > highestScore) {
+        highestScore = score;
+        bestPage = p;
+      }
+
+      // Decisive match (>= 1200 points): definitive hit, take immediately!
+      if (score >= 1200) {
         break;
       }
     }
 
-    // If not found forward, search from searchStart
-    if (!foundPage && searchStart <= pdfDoc.numPages) {
-      for (let p = searchStart; p <= pdfDoc.numPages; p++) {
-        const pText = pageTexts[p - 1]?.text || "";
-        const pTextClean = pText.replace(/[\s\(\)\[\]\.\,\?\!\-_·]/g, '');
-        if (titleKeyword.length >= 4 && pTextClean.includes(titleKeyword)) {
-          foundPage = p;
-          break;
-        }
-      }
-    }
-
-    // Fallback: If still not found, estimate smoothly
-    if (!foundPage) {
+    // Minimum confidence threshold: 220 points
+    let foundPage = null;
+    if (highestScore >= 220 && bestPage !== null) {
+      foundPage = bestPage;
+      console.log(`Question ${qId} ("${originalTitle.substring(0, 15)}...") matched to PDF page ${foundPage} (score: ${highestScore})`);
+    } else {
+      // Fallback if not matched: keep at prevFoundPage
       foundPage = Math.min(pdfDoc.numPages, prevFoundPage);
+      console.warn(`Question ${qId} ("${originalTitle.substring(0, 15)}...") low match score (${highestScore}), placed at PDF page ${foundPage}`);
     }
 
     prevFoundPage = foundPage;
 
     locatedItems.push({
       ...item,
+      id: qId,
       startPdfPage: foundPage
     });
   }
 
-  // Calculate endPdfPage and pageCount
+  // 3. Compute accurate endPdfPage and pageCount
   for (let i = 0; i < locatedItems.length; i++) {
     const curr = locatedItems[i];
     const next = locatedItems[i + 1];
 
-    if (next) {
-      curr.endPdfPage = Math.max(curr.startPdfPage, next.startPdfPage > curr.startPdfPage ? next.startPdfPage - 1 : curr.startPdfPage);
+    if (next && next.startPdfPage > curr.startPdfPage) {
+      curr.endPdfPage = next.startPdfPage - 1;
+    } else if (next && next.startPdfPage === curr.startPdfPage) {
+      curr.endPdfPage = curr.startPdfPage;
     } else {
       curr.endPdfPage = pdfDoc.numPages;
     }
-    curr.pageCount = curr.endPdfPage - curr.startPdfPage + 1;
 
-    // If docPage is missing or blank, automatically create docPage label
-    if (!curr.docPage || curr.docPage.trim() === "") {
-      curr.docPage = (curr.startPdfPage === curr.endPdfPage) 
-        ? `${curr.startPdfPage}` 
-        : `${curr.startPdfPage}~${curr.endPdfPage}`;
+    curr.pageCount = Math.max(1, curr.endPdfPage - curr.startPdfPage + 1);
+
+    // Format docPage label clearly
+    if (curr.pageCount > 1) {
+      curr.docPage = `${curr.startPdfPage}~${curr.endPdfPage}`;
+    } else {
+      curr.docPage = `${curr.startPdfPage}`;
     }
   }
 
@@ -347,6 +458,7 @@ function locateQuestionsByContent(items, pdfDoc, pageTexts, detectedTocPages) {
 }
 
 // Built-in intelligent client-side text parser (when AI key is not set or failed)
+// Cleans table noise like "김남국 의원 학생배치팀 2 ○ " from titles
 function parseQuestionsHeuristic(pageTexts, structure) {
   const items = [];
   const targetPages = (structure.tocPages && structure.tocPages.length > 0)
@@ -366,33 +478,62 @@ function parseQuestionsHeuristic(pageTexts, structure) {
       const line = chunk.trim();
       if (!line || line.length < 5) continue;
 
-      // Detect team or category keywords
-      if (line.includes("팀") && line.length < 20) {
-        currentTeam = line.replace(/[^가-힣a-zA-Z0-9]/g, '');
+      // Detect team keywords (학생배치팀, 조직관리팀, 법무팀 등)
+      const teamMatch = line.match(/([가-힣]{2,6}팀)/);
+      if (teamMatch) {
+        currentTeam = teamMatch[1];
+        currentCategory = teamMatch[1];
       }
 
-      // Check if chunk is a question
-      const isQuestion = /[?？]$/.test(line) || /\[문항\s*\d+\]/i.test(line) || /^\d+[\.\)]\s+/.test(line);
+      // Check if chunk is a question (ends with ? or contains 【X】 or [문항 X])
+      const isQuestion = /[?？]$/.test(line) || /【\s*\d+\s*】/.test(line) || /\[문항\s*\d+\]/i.test(line);
       
       if (isQuestion && line.length >= 6) {
-        let cleanTitle = line
-          .replace(/^\[문항\s*\d+\]\s*/i, '')
-          .replace(/^\d+[\.\)]\s*/, '')
-          .trim();
+        // Strip table noise, author names, team names, bullet symbols before question title
+        let cleanTitle = line;
+        
+        // If line has '○', the question starts right after '○'
+        if (cleanTitle.includes('○')) {
+          cleanTitle = cleanTitle.substring(cleanTitle.indexOf('○') + 1);
+        } else if (cleanTitle.includes('【')) {
+          cleanTitle = cleanTitle.substring(cleanTitle.indexOf('】') + 1);
+        } else {
+          // Remove leading numbers, brackets, noise
+          cleanTitle = cleanTitle
+            .replace(/^.*?[○●■▶\d\.\)]\s*/, '')
+            .replace(/^[가-힣\s]+의원\s*/, '')
+            .replace(/^[가-힣\s]+팀\s*/, '')
+            .trim();
+        }
+
+        // Cut trailing officer/team noise after question mark if any
+        if (cleanTitle.includes('?')) {
+          cleanTitle = cleanTitle.substring(0, cleanTitle.lastIndexOf('?') + 1);
+        } else if (cleanTitle.includes('？')) {
+          cleanTitle = cleanTitle.substring(0, cleanTitle.lastIndexOf('？') + 1);
+        }
+
+        cleanTitle = cleanTitle.trim();
 
         // Avoid duplicates
         if (cleanTitle.length >= 5 && !items.some(it => it.title === cleanTitle)) {
-          // Extract possible doc page reference
-          const pageMatch = line.match(/(\d+)(?:\s*~\s*(\d+))?\s*쪽/);
-          const docPageStr = pageMatch ? (pageMatch[2] ? `${pageMatch[1]}~${pageMatch[2]}` : pageMatch[1]) : "";
+          // Detect officer/author from original chunk
+          let officer = "";
+          const officerMatch = line.match(/([가-힣]{2,4}\s*의원|언론|현안)/);
+          if (officerMatch) officer = officerMatch[1];
+
+          // Try to detect docPage number from line if any
+          let docPage = "";
+          const pageMatch = line.match(/(?:쪽수|쪽|p|page)?\s*(\d{1,3})\s*$/i);
+          if (pageMatch) docPage = pageMatch[1];
 
           items.push({
             id: questionCounter++,
-            team: currentTeam,
-            category: currentCategory,
-            officer: "",
+            team: currentTeam || "행정과",
+            category: currentCategory || "질의 문항",
+            officer: officer,
             title: cleanTitle,
-            docPage: docPageStr,
+            docPage: docPage,
             tocPage: pageObj.pageNum,
             settle: "",
             explain: "",
@@ -408,7 +549,7 @@ function parseQuestionsHeuristic(pageTexts, structure) {
 }
 
 // ==========================================================================
-// 3. AI-BASED PARSER (Gemini API with Fallback)
+// 3. AI-BASED PARSER (Multi-Model Resilient Fallback)
 // ==========================================================================
 
 async function parseUploadedPdf(pdfDoc, fileName) {
@@ -418,7 +559,7 @@ async function parseUploadedPdf(pdfDoc, fileName) {
 
   if (loadingOverlay) loadingOverlay.style.display = 'flex';
   if (loadingTitle) loadingTitle.innerText = "PDF 전체 텍스트 및 구조 분석 중...";
-  if (loadingDesc) loadingDesc.innerText = "문서의 표지, 목차, 질문 목록 및 쪽수 유무를 정밀 스캔하고 있습니다.";
+  if (loadingDesc) loadingDesc.innerText = "문서의 표지, 목차, 질문 목록 및 본문 쪽수를 정밀 스캔하고 있습니다.";
 
   // 1. Fast Full Text Extraction
   const pageTexts = await extractAllPagesText(pdfDoc);
@@ -429,79 +570,94 @@ async function parseUploadedPdf(pdfDoc, fileName) {
 
   let rawParsedItems = [];
 
-  // 3. AI Parsing if Gemini API Key is available
+  // 3. AI Parsing with Multi-Model Fallback (3.5-flash-lite -> 3.5-flash -> flash-latest)
   if (geminiApiKey) {
-    try {
-      if (loadingTitle) loadingTitle.innerText = "Gemini AI가 목차를 분석하는 중...";
-      if (loadingDesc) loadingDesc.innerText = "부서별 질의 문항, 카테고리, 관련 쪽수를 정밀 구조화하고 있습니다.";
+    const candidateModels = [
+      "gemini-3.5-flash-lite",
+      "gemini-3.5-flash",
+      "gemini-flash-latest"
+    ];
 
-      // Gather text from TOC pages or first 6 pages
-      const targetPageNums = structure.tocPages.length > 0 
-        ? structure.tocPages 
-        : [1, 2, 3, 4].filter(p => p <= pdfDoc.numPages);
+    // Gather text from TOC pages or first 6 pages
+    const targetPageNums = structure.tocPages.length > 0 
+      ? structure.tocPages 
+      : [1, 2, 3, 4].filter(p => p <= pdfDoc.numPages);
 
-      let contextText = "";
-      for (const p of targetPageNums) {
-        contextText += `\n--- [PDF Page ${p}] ---\n` + (pageTexts[p - 1]?.text || "");
-      }
+    let contextText = "";
+    for (const p of targetPageNums) {
+      contextText += `\n--- [PDF Page ${p}] ---\n` + (pageTexts[p - 1]?.text || "");
+    }
 
-      const prompt = `당신은 공공기관/교육청 결산 및 행정감사 질의서 분석 전문가입니다.
+    const prompt = `당신은 공공기관/교육청 결산 및 행정감사 질의서 분석 전문가입니다.
 제공된 텍스트는 PDF 문서의 앞부분(목차 및 관련 페이지) 텍스트입니다.
-중요 참고사항:
-- 이 문서는 1페이지에 표지가 없을 수도 있습니다 (1페이지부터 바로 목차 또는 본문일 수 있음).
-- 목차에 쪽수(페이지 번호)가 적혀있지 않을 수도 있습니다.
-- 문서에 목차가 아예 없을 수도 있습니다.
 
-문서에 나타난 모든 질의 문항 목록을 정밀하게 분석하여 순수 JSON 배열 형식으로만 반환하세요.
+[중요 파싱 규칙]:
+1. id 필드: 문항 순번 (1부터 시작하는 정수 1, 2, 3...)을 반드시 부여하세요.
+2. title 필드: 앞에 붙은 순번(1, 2...), 기호(○, -, ■), 의원명(김남국 의원 등), 팀명 등을 모두 제외하고 오직 순수한 '질의 제목 전문'만 넣으세요.
+   (예: "초·중·고등학교의 과밀학급 및 과대학교 현황과 대책은?")
+3. category 필드: 팀명(예: "학생배치팀", "조직관리팀", "법무팀" 등)으로 그룹화하세요.
+4. team 필드: 해당 팀명을 넣으세요.
+5. officer 필드: 구분/의원명(예: "문정복 의원", "김남국 의원", "언론", "현안" 등)이 있으면 넣고 없으면 빈 문자열 ""로 두세요.
+6. docPage 필드: 목차 표의 '쪽수' 컬럼에 명시된 시작 쪽수(예: "1", "6", "8", "9", "11" 등 숫자 문자열)를 추출하세요. 쪽수가 없으면 빈 문자열 ""로 두세요.
+7. [매우 중요 - 불필요한 태그 추출 금지]:
+   문서 목차에 '결산서 쪽수', '설명자료 쪽수' 등의 명시적인 연관 쪽수 헤더/컬럼이 없는 일반 감사 질의서(국정감사 등)의 경우, 없는 참조 쪽수를 억지로 유추하거나 생성하지 마세요.
+   settle, explain, attach, opinion 필드는 목차에 해당 컬럼이 명시되어 있을 때만 추출하고, 없으면 반드시 빈 문자열 ""로 설정하세요.
+8. 오직 파싱 가능한 순수 JSON 배열만 반환하세요. 마크다운 코드블록은 제외하세요.
 
-[요구 스키마]:
-- [ { ... }, { ... } ] 형태의 JSON 배열
-- 각 객체 필드:
-  - id: 문항 번호 (정수 1, 2, 3...)
-  - team: 담당 부서 또는 팀명 (텍스트에 나타난 대로, 없으면 "")
-  - category: 세부 카테고리/소제목 (없으면 "일반")
-  - officer: 담당자 이름 (있으면 기입, 없으면 "")
-  - title: 질의 제목 전문 (질문 전체 문장 누락 없이)
-  - docPage: 목차에 적힌 문서 본문 쪽수 (쪽수가 없거나 모르면 빈 문자열 "")
-  - settle: 결산서 연관 쪽수 (없으면 "")
-  - explain: 설명자료 연관 쪽수 (없으면 "")
-  - attach: 첨부/부속서류 연관 쪽수 (없으면 "")
-  - opinion: 의견서 연관 쪽수 (없으면 "")
-  - tocPage: 해당 문항이 발견된 목차의 PDF 쪽수 (정수, 보통 1, 2 또는 3)
-
-주의: 설명이나 마크다운 코드블록(\`\`\`json 등) 없이 오직 파싱 가능한 순수 JSON 배열만 반환하세요.
+[반환 JSON 스키마 예시]:
+[
+  {
+    "id": 1,
+    "title": "초·중·고등학교의 과밀학급 및 과대학교 현황과 대책은?",
+    "category": "학생배치팀",
+    "team": "학생배치팀",
+    "officer": "문정복 의원",
+    "docPage": "1",
+    "settle": "",
+    "explain": "",
+    "attach": "",
+    "opinion": ""
+  }
+]
 
 [문서 텍스트]:
 ${contextText}
 `;
 
-      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${geminiApiKey}`;
-      const response = await fetch(apiUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0.1,
-            responseMimeType: "application/json"
-          }
-        })
-      });
+    for (const modelName of candidateModels) {
+      try {
+        if (loadingTitle) loadingTitle.innerText = `Gemini AI(${modelName})가 목차 분석 중...`;
+        if (loadingDesc) loadingDesc.innerText = "질의 문항, 팀별 카테고리, 담당 의원을 정밀 구조화하고 있습니다.";
 
-      if (response.ok) {
-        const data = await response.json();
-        let rawReply = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-        rawReply = rawReply.replace(/```json/gi, '').replace(/```/g, '').trim();
-        const parsed = JSON.parse(rawReply);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          rawParsedItems = parsed;
-          console.log(`Gemini AI parsed ${parsed.length} questions.`);
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${geminiApiKey}`;
+        const response = await fetch(apiUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+              temperature: 0.1,
+              responseMimeType: "application/json"
+            }
+          })
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          let rawReply = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+          rawReply = rawReply.replace(/```json/gi, '').replace(/```/g, '').trim();
+          const parsed = JSON.parse(rawReply);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            rawParsedItems = parsed;
+            console.log(`Gemini AI (${modelName}) successfully parsed ${parsed.length} questions.`);
+            break; // Success! Exit model loop
+          }
+        } else {
+          console.warn(`Model ${modelName} returned status ${response.status}, trying next model...`);
         }
-      } else {
-        console.warn("Gemini API call returned status:", response.status);
+      } catch (err) {
+        console.warn(`Model ${modelName} failed:`, err);
       }
-    } catch (aiErr) {
-      console.warn("AI parsing failed or error:", aiErr);
     }
   }
 
@@ -529,10 +685,36 @@ ${contextText}
           docPage: `${p}`,
           startPdfPage: p,
           endPdfPage: p,
-          pageCount: 1
+          pageCount: 1,
+          settle: "",
+          explain: "",
+          attach: "",
+          opinion: ""
         });
       }
     }
+  }
+
+  // 5-1. Normalize and guarantee item.id as valid integers and clean fields
+  if (Array.isArray(rawParsedItems)) {
+    rawParsedItems = rawParsedItems.map((item, idx) => {
+      const rawId = item.id !== undefined ? item.id : (item.no || item.num || item.order);
+      const parsedId = parseInt(rawId, 10);
+      const validId = (!isNaN(parsedId) && parsedId > 0) ? parsedId : (idx + 1);
+
+      return {
+        id: validId,
+        team: (item.team || item.department || "").trim(),
+        category: (item.category || item.team || "일반").trim(),
+        officer: (item.officer || item.author || "").trim(),
+        title: (item.title || "").trim(),
+        docPage: (item.docPage ? String(item.docPage).trim() : ""),
+        settle: (item.settle ? String(item.settle).trim() : ""),
+        explain: (item.explain ? String(item.explain).trim() : ""),
+        attach: (item.attach ? String(item.attach).trim() : ""),
+        opinion: (item.opinion ? String(item.opinion).trim() : "")
+      };
+    });
   }
 
   // 6. Content-based Precise Page Location (Matches keywords to actual PDF body pages)
@@ -601,20 +783,21 @@ function renderQuestionList() {
     if (sidebar) sidebar.classList.remove('mode-title-list');
   }
 
-  categoryOrder.forEach(catName => {
+    categoryOrder.forEach(catName => {
     const items = groups[catName];
     if (!items || items.length === 0) return;
 
     const groupEl = document.createElement('div');
     groupEl.className = 'cat-group';
 
-    // Category Header Bar
+    // Category Header Bar (Hide duplicate team badge if catName equals teamName)
     const headerEl = document.createElement('div');
     headerEl.className = 'cat-header';
-    const teamName = items[0].team || '';
+    const teamName = (items[0].team || '').trim();
+    const hasSeparateTeam = teamName && teamName !== catName.trim();
     headerEl.innerHTML = `
       <span class="cat-title">${catName}</span>
-      <span class="cat-team-badge">${teamName}</span>
+      ${hasSeparateTeam ? `<span class="cat-team-badge">${teamName}</span>` : ''}
     `;
     groupEl.appendChild(headerEl);
 
@@ -623,16 +806,18 @@ function renderQuestionList() {
       const gridEl = document.createElement('div');
       gridEl.className = 'cat-btn-grid';
 
-      items.forEach(item => {
+      items.forEach((item, idx) => {
+        const id = Number(item.id) || (idx + 1);
         const btn = document.createElement('button');
-        const isActive = (currentViewMode === 'question' && selectedQuestionId === item.id);
+        const isActive = (currentViewMode === 'question' && selectedQuestionId === id);
         btn.className = `btn-q-num ${isActive ? 'active' : ''}`;
-        btn.innerText = item.id;
+        btn.innerText = id;
         const officerStr = item.officer ? `\n담당: ${item.officer}` : '';
-        btn.title = `[문항 ${item.id}] (${item.docPage}p) ${item.title}${officerStr}`;
+        const pageStr = item.docPage ? `(${item.docPage}p)` : `(PDF ${item.startPdfPage}p)`;
+        btn.title = `[문항 ${id}] ${pageStr} ${item.title}${officerStr}`;
 
         btn.addEventListener('click', () => {
-          openQuestion(item.id);
+          openQuestion(id);
         });
 
         gridEl.appendChild(btn);
@@ -641,17 +826,19 @@ function renderQuestionList() {
       groupEl.appendChild(gridEl);
     } else {
       // 2) TITLE LIST MODE: Vertical Detailed Title Cards
-      items.forEach(item => {
+      items.forEach((item, idx) => {
+        const id = Number(item.id) || (idx + 1);
         const itemEl = document.createElement('div');
-        const isActive = (currentViewMode === 'question' && selectedQuestionId === item.id);
+        const isActive = (currentViewMode === 'question' && selectedQuestionId === id);
         itemEl.className = `q-title-item ${isActive ? 'active' : ''}`;
-        itemEl.id = `sidebar-item-${item.id}`;
+        itemEl.id = `sidebar-item-${id}`;
 
+        // Only include reference tags if actual page numbers exist
         const refParts = [];
-        if (item.settle) refParts.push(`결산 ${item.settle}`);
-        if (item.explain) refParts.push(`설명 ${item.explain}`);
-        if (item.attach) refParts.push(`첨부 ${item.attach}`);
-        if (item.opinion) refParts.push(`의견 ${item.opinion}`);
+        if (item.settle && item.settle.trim() && /\d/.test(item.settle)) refParts.push(`결산 ${item.settle.trim()}`);
+        if (item.explain && item.explain.trim() && /\d/.test(item.explain)) refParts.push(`설명 ${item.explain.trim()}`);
+        if (item.attach && item.attach.trim() && /\d/.test(item.attach)) refParts.push(`첨부 ${item.attach.trim()}`);
+        if (item.opinion && item.opinion.trim() && /\d/.test(item.opinion)) refParts.push(`의견 ${item.opinion.trim()}`);
 
         const refsHtml = refParts.length > 0
           ? `<div class="q-title-refs">${refParts.map(r => `<span class="q-title-ref-tag">${r}</span>`).join('')}</div>`
@@ -661,7 +848,7 @@ function renderQuestionList() {
 
         itemEl.innerHTML = `
           <div class="q-title-top-row">
-            <span class="q-title-badge">${item.id}</span>
+            <span class="q-title-badge">${id}</span>
             <span class="q-title-page-hint">${pageLabel}</span>
           </div>
           <div class="q-title-text" title="${item.title}">${item.title}</div>
@@ -669,7 +856,7 @@ function renderQuestionList() {
         `;
 
         itemEl.addEventListener('click', () => {
-          openQuestion(item.id);
+          openQuestion(id);
         });
 
         groupEl.appendChild(itemEl);
@@ -749,9 +936,10 @@ async function renderQuestionAnswerPage(pageNum, q, container) {
 
   const tag = document.createElement('div');
   tag.className = 'page-indicator-tag';
+  const qId = Number(q.id) || 1;
   const relPage = (pageNum - q.startPdfPage) + 1;
   const pageCount = q.pageCount || 1;
-  tag.innerText = `문항 ${q.id} (${relPage}/${pageCount} 쪽) - PDF ${pageNum}쪽`;
+  tag.innerText = `문항 ${qId} (${relPage}/${pageCount} 쪽) - PDF ${pageNum}쪽`;
   card.appendChild(tag);
 
   const canvas = document.createElement('canvas');
@@ -793,7 +981,8 @@ async function renderCurrentView(autoFit = true) {
 
   currentViewMode = 'question';
   const q = currentQuestion;
-  selectedQuestionId = q.id;
+  const qId = Number(q.id) || 1;
+  selectedQuestionId = qId;
 
   // Deactivate TOC button
   const btnToc = document.getElementById('btn-show-toc');
@@ -810,17 +999,18 @@ async function renderCurrentView(autoFit = true) {
   // Update Question Number Pill Badge
   const qNumPill = document.getElementById('badge-q-num-pill');
   if (qNumPill) {
-    qNumPill.innerText = `${q.id}`;
+    qNumPill.innerText = `${qId}`;
     qNumPill.classList.remove('badge-toc-mode');
   }
 
   const badgeTitle = document.getElementById('current-mode-title');
   const refParts = [];
-  if (q.settle) refParts.push(`결산서 ${q.settle}`);
-  if (q.explain) refParts.push(`설명자료 ${q.explain}`);
-  if (q.attach) refParts.push(`첨부 ${q.attach}`);
-  if (q.opinion) refParts.push(`의견서 ${q.opinion}`);
+  if (q.settle && q.settle.trim() && /\d/.test(q.settle)) refParts.push(`결산서 ${q.settle.trim()}`);
+  if (q.explain && q.explain.trim() && /\d/.test(q.explain)) refParts.push(`설명자료 ${q.explain.trim()}`);
+  if (q.attach && q.attach.trim() && /\d/.test(q.attach)) refParts.push(`첨부 ${q.attach.trim()}`);
+  if (q.opinion && q.opinion.trim() && /\d/.test(q.opinion)) refParts.push(`의견서 ${q.opinion.trim()}`);
 
+  // Only show badge-refs if there are actual valid reference pages!
   const refsHtml = refParts.length > 0 
     ? `<span class="badge-refs">${refParts.join(' · ')}</span>` 
     : '';
@@ -834,7 +1024,7 @@ async function renderCurrentView(autoFit = true) {
   const modeBadge = document.getElementById('current-view-mode-badge');
   if (modeBadge) {
     const refText = refParts.length > 0 ? ` (${refParts.join(' · ')})` : '';
-    modeBadge.title = `[문항 ${q.id}] ${q.title}${refText}`;
+    modeBadge.title = `[문항 ${qId}] ${q.title}${refText}`;
   }
 
   viewportContainer.innerHTML = '';
@@ -949,7 +1139,8 @@ async function openTocView(autoFit = true) {
 }
 
 async function openQuestion(questionId, autoFit = true) {
-  const q = currentItems.find(i => i.id === questionId);
+  const targetId = Number(questionId);
+  const q = currentItems.find(i => Number(i.id) === targetId);
   if (!q) return;
 
   currentQuestion = q;
