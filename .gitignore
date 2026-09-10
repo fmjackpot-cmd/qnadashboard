@@ -1,0 +1,15 @@
+# API Key & Secrets (절대 깃허브에 올리지 마세요)
+.env
+.env.local
+.env.*.local
+
+# Temporary / Scratch files
+scratch/
+*.tmp
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini
+

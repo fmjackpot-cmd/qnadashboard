@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>충북교육청 결산 예상질의 스마트 네비게이션 대시보드</title>
+  
+  <!-- Mobile Fullscreen / Standalone Web App Meta -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#1e293b">
+  <link rel="manifest" href="manifest.json">
+
+  <!-- Pretendard Font & FontAwesome -->
+  <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  
+  <!-- PDF.js & pdf-lib -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.9/pdf-lib.min.js"></script>
+
+  <!-- External Stylesheet -->
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Main Container (Full Height 100vh) -->
+  <div class="main-container">
+    
+    <!-- Sidebar (Left) -->
+    <aside class="sidebar" id="sidebar">
+      <!-- Sidebar View Mode Tabs -->
+      <div class="sidebar-tabs">
+        <button class="tab-btn active" id="tab-btn-grid" data-mode="grid" title="3열 번호 버튼 모드">
+          <i class="fa-solid fa-table-cells"></i>
+          <span>번호 버튼</span>
+        </button>
+        <button class="tab-btn" id="tab-btn-list" data-mode="list" title="질의 제목 목록 모드">
+          <i class="fa-solid fa-list-ul"></i>
+          <span>제목 목록</span>
+        </button>
+      </div>
+
+      <!-- Question List -->
+      <div class="q-list" id="q-list">
+        <!-- Questions injected via app.js -->
+      </div>
+    </aside>
+
+    <!-- Resizer Bar (Draggable Bar between Sidebar and Viewer) -->
+    <div class="resizer" id="sidebar-resizer" title="좌우로 드래그하여 목록 너비를 조절하세요"></div>
+
+    <!-- Viewer Container (Right) -->
+    <main class="viewer-container">
+      
+      <!-- Viewer Sticky Toolbar (Integrated with all control buttons) -->
+      <div class="viewer-toolbar">
+        <div class="tool-group left-group">
+          <!-- Current Mode Status Badge (Number Pill, Title & Related Pages) -->
+          <div class="current-mode-badge" id="current-view-mode-badge">
+            <span class="badge-q-num-pill" id="badge-q-num-pill">-</span>
+            <span id="current-mode-title">PDF 문서를 열어주세요</span>
+          </div>
+
+          <!-- TOC View Button -->
+          <button class="btn-tool btn-tool-toc" id="btn-show-toc" title="전체 목차를 세로 스크롤로 연속 열람합니다">
+            <i class="fa-solid fa-list-check"></i>
+            <span class="btn-text-responsive">목차 보기</span>
+          </button>
+        </div>
+
+        <div class="tool-group right-group">
+          <!-- Zoom Controls -->
+          <div class="tool-group zoom-ctrl-group">
+            <button class="btn-tool" id="btn-zoom-out" title="축소"><i class="fa-solid fa-minus"></i></button>
+            <span id="zoom-level" style="font-weight: 700; min-width: 44px; text-align: center; color: #1e293b;">100%</span>
+            <button class="btn-tool" id="btn-zoom-in" title="확대"><i class="fa-solid fa-plus"></i></button>
+          </div>
+
+          <button class="btn-tool" id="btn-zoom-fit" title="현재 화면 가로폭에 100% 맞춤">
+            <i class="fa-solid fa-arrows-left-right-to-line"></i>
+            <span class="btn-text-hide">맞춤</span>
+          </button>
+
+          <div class="toolbar-divider"></div>
+
+          <!-- File Open & Fullscreen Actions -->
+          <button class="btn-tool btn-tool-primary" id="btn-select-file" title="다른 PDF 파일 불러오기">
+            <i class="fa-solid fa-file-arrow-up"></i>
+            <span class="btn-text-responsive">파일 열기</span>
+          </button>
+          
+          <button class="btn-tool" id="btn-ai-settings" title="Gemini AI API 키 설정">
+            <i class="fa-solid fa-gear"></i>
+          </button>
+
+          <button class="btn-tool" id="btn-fullscreen" title="전체화면 모드 (주소창 숨기기)">
+            <i class="fa-solid fa-expand"></i>
+          </button>
+          <input type="file" id="file-input" accept="application/pdf" style="display: none;">
+        </div>
+      </div>
+
+      <!-- PDF Viewport -->
+      <div class="pdf-viewport" id="pdf-viewport">
+        <!-- Rendered Pages will appear here -->
+      </div>
+
+      <!-- Upload Screen Overlay -->
+      <div class="upload-overlay" id="upload-overlay">
+        <div class="drop-zone" id="drop-zone">
+          <i class="fa-solid fa-file-pdf"></i>
+          <h3>PDF 문서를 드래그하거나 선택해주세요</h3>
+          <p>
+            현재 폴더의 <strong>「★★★(최종)2025회계연도 결산 예상질의 답변(0908_v2).pdf」</strong> 파일이나<br>
+            향후 처리할 새 결산/감사 질의서 PDF를 여기에 끌어다 놓으세요.
+          </p>
+          <div class="drop-btn-row">
+            <button class="btn-quick-load" id="btn-select-drop">
+              <i class="fa-solid fa-folder-open"></i> 내 PC에서 파일 선택
+            </button>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Toast Notification (Disabled) -->
+  <div class="toast" id="toast">
+    <i class="fa-solid fa-circle-check"></i>
+    <span id="toast-message">알림 메시지</span>
+  </div>
+
+  <!-- Global Window Drag & Drop Overlay -->
+  <div class="window-drag-overlay" id="window-drag-overlay">
+    <i class="fa-solid fa-file-arrow-up"></i>
+    <h2>PDF 문서를 여기에 놓으세요</h2>
+    <p>문서를 놓으면 새 결산 질의서가 즉시 로드됩니다.</p>
+  </div>
+
+  <!-- AI Analysis Loading Overlay -->
+  <div class="ai-loading-overlay" id="ai-loading-overlay" style="display: none;">
+    <div class="ai-loading-card">
+      <div class="ai-spinner">
+        <i class="fa-solid fa-robot"></i>
+      </div>
+      <h3 id="ai-loading-title">Gemini AI가 목차를 분석하는 중...</h3>
+      <p id="ai-loading-desc">다양한 부서 서식의 목차에서 질의 문항과 관련 쪽수를 자동으로 추출하고 있습니다.</p>
+      <div class="ai-loading-progress">
+        <div class="ai-progress-bar"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- AI Settings Modal -->
+  <div class="modal-backdrop" id="ai-settings-modal" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-robot"></i> Gemini AI 설정</h3>
+        <button class="btn-close-modal" id="btn-close-ai-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">
+          새로운 부서의 결산 질의서 PDF를 정규식 없이 AI로 자동 분석하기 위해 <strong>Gemini API Key</strong>가 필요합니다.
+          키는 <code>.env</code> 파일에 넣거나 아래에 직접 입력할 수 있습니다.
+        </p>
+        <div class="form-group">
+          <label for="input-api-key">Gemini API Key</label>
+          <input type="password" id="input-api-key" placeholder="AIzaSy... 형식의 API 키 입력">
+          <span class="key-status-hint" id="key-status-hint">현재 상태: 확인 중...</span>
+        </div>
+        <div class="guide-box">
+          <p><i class="fa-solid fa-circle-info"></i> <strong>무료 API 키 발급 방법:</strong></p>
+          <ol>
+            <li><a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">Google AI Studio (aistudio.google.com)</a>에 로그인</li>
+            <li><strong>[Create API key]</strong> 버튼 클릭 후 키 복사</li>
+            <li>작업 폴더의 <code>.env</code> 파일의 <code>GEMINI_API_KEY=</code> 뒤에 붙여넣거나 위에 입력</li>
+          </ol>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-modal-secondary" id="btn-test-ai-key" style="margin-right: auto; color: #1e40af; border-color: #bfdbfe; background: #eff6ff;">
+          <i class="fa-solid fa-vial-circle-check"></i> 연결 테스트
+        </button>
+        <button class="btn-modal-secondary" id="btn-cancel-ai-key">닫기</button>
+        <button class="btn-modal-primary" id="btn-save-ai-key">저장하기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- External Script -->
+  <script src="app.js" defer></script>
+</body>
+</html>

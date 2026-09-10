@@ -1,0 +1,10 @@
+{
+  "name": "충북교육청 결산 예상질의 스마트 네비게이터",
+  "short_name": "결산질의",
+  "description": "2025회계연도 충북교육청 결산심사 예상질의 스마트 대시보드",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0f172a",
+  "theme_color": "#1e293b"
+}
