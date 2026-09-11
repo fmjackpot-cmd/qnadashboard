@@ -28,8 +28,19 @@
   <!-- Main Container (Full Height 100vh) -->
   <div class="main-container">
     
+    <!-- Mobile Sidebar Backdrop -->
+    <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+
     <!-- Sidebar (Left) -->
     <aside class="sidebar" id="sidebar">
+      <!-- Mobile Sidebar Header with Close Button -->
+      <div class="sidebar-mobile-header">
+        <span><i class="fa-solid fa-list"></i> 질의 문항 목록</span>
+        <button class="btn-close-sidebar" id="btn-close-sidebar" title="목록 닫기">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
       <!-- Sidebar View Mode Tabs -->
       <div class="sidebar-tabs">
         <button class="tab-btn active" id="tab-btn-grid" data-mode="grid" title="3열 번호 버튼 모드">
@@ -57,6 +68,22 @@
       <!-- Viewer Sticky Toolbar (Integrated with all control buttons) -->
       <div class="viewer-toolbar">
         <div class="tool-group left-group">
+          <!-- Mobile Sidebar Toggle Button -->
+          <button class="btn-tool btn-mobile-toggle" id="btn-toggle-sidebar" title="질의 목록 열기/닫기">
+            <i class="fa-solid fa-bars"></i>
+            <span class="btn-text-mobile-menu">목록</span>
+          </button>
+
+          <!-- Prev/Next Question Quick Buttons -->
+          <div class="tool-group nav-btn-group">
+            <button class="btn-tool btn-nav-q" id="btn-prev-q" title="이전 문항으로 이동">
+              <i class="fa-solid fa-chevron-left"></i>
+            </button>
+            <button class="btn-tool btn-nav-q" id="btn-next-q" title="다음 문항으로 이동">
+              <i class="fa-solid fa-chevron-right"></i>
+            </button>
+          </div>
+
           <!-- Current Mode Status Badge (Number Pill, Title & Related Pages) -->
           <div class="current-mode-badge" id="current-view-mode-badge">
             <span class="badge-q-num-pill" id="badge-q-num-pill">-</span>
