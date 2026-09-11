@@ -3,54 +3,6 @@ if (window.pdfjsLib) {
   pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 }
 
-// 41 Questions Default Dataset (Fallback and Reference)
-const defaultItems = [
-  // 2페이지 목차 (질의 1 ~ 20)
-  { id: 1, team: "학생배치팀", category: "사전기획용역", officer: "김남희", title: "(가칭)장성초 사전기획용역비 명시이월 사유 및 집행현황은?", docPage: "1", startPdfPage: 4, endPdfPage: 4, pageCount: 1, tocPage: 2, settle: "134 쪽", explain: "", attach: "684 쪽", opinion: "" },
-  { id: 2, team: "학생배치팀", category: "사전기획용역", officer: "김남희", title: "2024년 명시이월 학교신설 사전기획용역비 집행현황은?", docPage: "2", startPdfPage: 5, endPdfPage: 5, pageCount: 1, tocPage: 2, settle: "134 쪽", explain: "", attach: "684 쪽", opinion: "" },
-  { id: 3, team: "학생배치팀", category: "학교용지부담금 등", officer: "김남희", title: "학교용지부담금 현황은?", docPage: "3", startPdfPage: 6, endPdfPage: 6, pageCount: 1, tocPage: 2, settle: "", explain: "", attach: "", opinion: "재무제표 19,36 쪽" },
-  { id: 4, team: "학생배치팀", category: "학교용지부담금 등", officer: "구영모", title: "혜원학교, 이은학교, 특수학급 신·증설 예산 현황은?", docPage: "4~5", startPdfPage: 7, endPdfPage: 8, pageCount: 2, tocPage: 2, settle: "133 쪽", explain: "335 쪽", attach: "", opinion: "" },
-  { id: 5, team: "학생배치팀", category: "학교용지부담금 등", officer: "김남희", title: "(가칭)동남고 설립 계획은?", docPage: "6~7", startPdfPage: 9, endPdfPage: 10, pageCount: 2, tocPage: 2, settle: "134 쪽", explain: "", attach: "684 쪽", opinion: "" },
-  { id: 6, team: "학생배치팀", category: "학교용지부담금 등", officer: "강은해", title: "학생배치계획관리의 지방자치단체등이전 사업(분담금)의 집행현황은?", docPage: "8", startPdfPage: 11, endPdfPage: 11, pageCount: 1, tocPage: 2, settle: "137 쪽", explain: "345~346 쪽", attach: "", opinion: "" },
-  { id: 7, team: "학생배치팀", category: "학교용지부담금 등", officer: "김진옥", title: "제천산업고 계속비 이월 사유는?", docPage: "9", startPdfPage: 12, endPdfPage: 12, pageCount: 1, tocPage: 2, settle: "134 쪽", explain: "339 쪽", attach: "", opinion: "" },
-  { id: 8, team: "학생배치팀", category: "학교용지부담금 등", officer: "김진옥", title: "제천산업고 지연에 따른 수업 대책은?", docPage: "10", startPdfPage: 13, endPdfPage: 13, pageCount: 1, tocPage: 2, settle: "134 쪽", explain: "339 쪽", attach: "", opinion: "" },
-  { id: 9, team: "학생배치팀", category: "학교용지부담금 등", officer: "김진옥", title: "학교신증설사업(제천산업고, 동성고) 계속비이월 이월 내역은?", docPage: "11", startPdfPage: 14, endPdfPage: 14, pageCount: 1, tocPage: 2, settle: "134 쪽", explain: "339 쪽", attach: "", opinion: "" },
-  { id: 10, team: "학생배치팀", category: "학교용지부담금 등", officer: "김진옥", title: "2026년도 예산편성액을 추가로 조정하지 않은 사유는?", docPage: "12", startPdfPage: 15, endPdfPage: 15, pageCount: 1, tocPage: 2, settle: "134 쪽", explain: "339 쪽", attach: "", opinion: "" },
-  { id: 11, team: "학생배치팀", category: "학교용지부담금 등", officer: "김진옥", title: "제천산업고 2027년 5월 준공은 가능한가?", docPage: "13", startPdfPage: 16, endPdfPage: 16, pageCount: 1, tocPage: 2, settle: "134 쪽", explain: "339 쪽", attach: "", opinion: "" },
-  { id: 12, team: "학생배치팀", category: "학교용지부담금 등", officer: "김진옥", title: "제천산업고 2024년~2026년 불용액 합계가 약 48억 원인 이유는?", docPage: "14", startPdfPage: 17, endPdfPage: 17, pageCount: 1, tocPage: 2, settle: "134 쪽", explain: "339 쪽", attach: "", opinion: "" },
-  { id: 13, team: "학생배치팀", category: "학교용지부담금 등", officer: "김진옥", title: "동성고 계속비 이월(16,688천원) 이월 사유는?", docPage: "15", startPdfPage: 18, endPdfPage: 18, pageCount: 1, tocPage: 2, settle: "134 쪽", explain: "339 쪽", attach: "", opinion: "" },
-  { id: 14, team: "학생배치팀", category: "학교용지부담금 등", officer: "김진옥", title: "충북생명산업고 증축공사 집행잔액(549,017천원) 발생 사유는?", docPage: "16", startPdfPage: 19, endPdfPage: 19, pageCount: 1, tocPage: 2, settle: "134 쪽", explain: "338 쪽", attach: "", opinion: "" },
-  { id: 15, team: "학생배치팀", category: "통학버스", officer: "이아리", title: "그 밖에 통학지원이 필요한 경우에 따른 지원 현황은?", docPage: "17~18", startPdfPage: 20, endPdfPage: 21, pageCount: 2, tocPage: 2, settle: "136 쪽", explain: "345 쪽", attach: "", opinion: "" },
-  { id: 16, team: "학생배치팀", category: "통학버스", officer: "이아리", title: "제천시 교육경비보조금 중단 시 송학중 통학대책은?", docPage: "19~20", startPdfPage: 22, endPdfPage: 23, pageCount: 2, tocPage: 2, settle: "136 쪽", explain: "345 쪽", attach: "", opinion: "" },
-  { id: 17, team: "학생배치팀", category: "통학버스", officer: "이아리", title: "제천 미니복합타운 원거리 통학 초등학생의 통학대책은?", docPage: "21~22", startPdfPage: 24, endPdfPage: 25, pageCount: 2, tocPage: 2, settle: "136 쪽", explain: "345 쪽", attach: "", opinion: "" },
-  { id: 18, team: "학생배치팀", category: "통학버스", officer: "이아리", title: "2025년 특수학교 통학지원 현황은?", docPage: "23", startPdfPage: 26, endPdfPage: 26, pageCount: 1, tocPage: 2, settle: "136 쪽", explain: "345 쪽", attach: "", opinion: "" },
-  { id: 19, team: "학생배치팀", category: "통학버스", officer: "이아리", title: "임차차량 원가계산 방법은?", docPage: "24~25", startPdfPage: 27, endPdfPage: 28, pageCount: 2, tocPage: 2, settle: "136 쪽", explain: "345 쪽", attach: "", opinion: "" },
-  { id: 20, team: "학생배치팀", category: "통학버스", officer: "이아리", title: "2025~2026년 통학지원 현황은?", docPage: "26", startPdfPage: 29, endPdfPage: 29, pageCount: 1, tocPage: 2, settle: "136 쪽", explain: "345 쪽", attach: "", opinion: "" },
-
-  // 3페이지 목차 (질의 21 ~ 41)
-  { id: 21, team: "학생배치팀", category: "통학버스", officer: "이아리", title: "2026학년도 통학택시 및 통학비 지원 기준은?", docPage: "27~28", startPdfPage: 30, endPdfPage: 31, pageCount: 2, tocPage: 3, settle: "136 쪽", explain: "345 쪽", attach: "", opinion: "" },
-  { id: 22, team: "학생배치팀", category: "통학버스", officer: "이아리", title: "통학택시 운영 방법은?", docPage: "29", startPdfPage: 32, endPdfPage: 32, pageCount: 1, tocPage: 3, settle: "136 쪽", explain: "345 쪽", attach: "", opinion: "" },
-  { id: 23, team: "학생배치팀", category: "통학버스", officer: "이아리", title: "통학택시 단가 산정기준은?", docPage: "30", startPdfPage: 33, endPdfPage: 33, pageCount: 1, tocPage: 3, settle: "136 쪽", explain: "345 쪽", attach: "", opinion: "" },
-  { id: 24, team: "학생배치팀", category: "통학버스", officer: "이아리", title: "통학비 산정기준은?", docPage: "31", startPdfPage: 34, endPdfPage: 34, pageCount: 1, tocPage: 3, settle: "136 쪽", explain: "345 쪽", attach: "", opinion: "" },
-  { id: 25, team: "학생배치팀", category: "적정규모", officer: "김진옥", title: "작은학교 현황은?", docPage: "32~33", startPdfPage: 35, endPdfPage: 36, pageCount: 2, tocPage: 3, settle: "137 쪽", explain: "", attach: "", opinion: "" },
-  { id: 26, team: "학생배치팀", category: "적정규모", officer: "김진옥", title: "충청북도교육청의 적정규모학교육성 기준 및 추진절차는?", docPage: "34", startPdfPage: 37, endPdfPage: 37, pageCount: 1, tocPage: 3, settle: "137 쪽", explain: "", attach: "", opinion: "" },
-  { id: 27, team: "학생배치팀", category: "적정규모", officer: "김진옥", title: "분교장 개편 기준은?", docPage: "35", startPdfPage: 38, endPdfPage: 38, pageCount: 1, tocPage: 3, settle: "137 쪽", explain: "", attach: "", opinion: "" },
-  { id: 28, team: "학생배치팀", category: "적정규모", officer: "김진옥", title: "향후 적정규모학교 육성 예정학교 현황은?", docPage: "36", startPdfPage: 39, endPdfPage: 39, pageCount: 1, tocPage: 3, settle: "137 쪽", explain: "", attach: "", opinion: "" },
-  { id: 29, team: "학생배치팀", category: "적정규모", officer: "김진옥", title: "2026년 교직원이 학생보다 많은 학교 현황은?", docPage: "37~38", startPdfPage: 40, endPdfPage: 41, pageCount: 2, tocPage: 3, settle: "137 쪽", explain: "", attach: "", opinion: "" },
-  { id: 30, team: "학생배치팀", category: "적정규모", officer: "김진옥", title: "적정규모학교육성 사업 주요 집행 내역은?", docPage: "39", startPdfPage: 42, endPdfPage: 42, pageCount: 1, tocPage: 3, settle: "137 쪽", explain: "", attach: "", opinion: "" },
-  { id: 31, team: "학생배치팀", category: "기금전출금", officer: "권명성", title: "기금전출금 집행 내역은?", docPage: "40~41", startPdfPage: 43, endPdfPage: 44, pageCount: 2, tocPage: 3, settle: "138 쪽", explain: "349 쪽", attach: "", opinion: "" },
-  { id: 32, team: "학생배치팀", category: "기금전출금", officer: "권명성", title: "적정규모학교육성기금 초과 지출 발생(701,390원) 사유는?", docPage: "42", startPdfPage: 45, endPdfPage: 45, pageCount: 1, tocPage: 3, settle: "454 쪽", explain: "", attach: "", opinion: "" },
-  { id: 33, team: "조직관리팀", category: "조직관리", officer: "민해순", title: "조직분석 시도분담금 내역?", docPage: "43~44", startPdfPage: 46, endPdfPage: 47, pageCount: 2, tocPage: 3, settle: "135 쪽", explain: "344 쪽", attach: "", opinion: "" },
-  { id: 34, team: "조직관리팀", category: "조직관리", officer: "민해순", title: "교육문화복합시설(구.상당초 및 구.복대초) 이월액 및 불용액 발생 사유는?", docPage: "45~46", startPdfPage: 48, endPdfPage: 49, pageCount: 2, tocPage: 3, settle: "137 쪽", explain: "347~348 쪽", attach: "77 쪽", opinion: "" },
-  { id: 35, team: "조직관리팀", category: "조직관리", officer: "곽병두", title: "위원회 운영 예산 집행률(61.97%)이 저조한 사유는?", docPage: "47~51", startPdfPage: 50, endPdfPage: 54, pageCount: 5, tocPage: 3, settle: "", explain: "", attach: "", opinion: "결산검사의견서 37~39 쪽" },
-  { id: 36, team: "법무팀", category: "학원관리", officer: "고권영", title: "학원 설립 운영자, 강사 및 교습자 위탁연수 운영 현황은?", docPage: "52", startPdfPage: 55, endPdfPage: 55, pageCount: 1, tocPage: 3, settle: "", explain: "340 쪽", attach: "", opinion: "결산검사의견서 134 쪽" },
-  { id: 37, team: "법무팀", category: "학원관리", officer: "고권영", title: "학원 편·불법 운영 모니터링 위탁계약 현황은?", docPage: "53", startPdfPage: 56, endPdfPage: 56, pageCount: 1, tocPage: 3, settle: "", explain: "340 쪽", attach: "", opinion: "결산검사의견서 134 쪽" },
-  { id: 38, team: "법무팀", category: "학원관리", officer: "고권영", title: "학원 등 불법 운영 신고 포상금(보전금) 전액 불용 사유는?", docPage: "54", startPdfPage: 57, endPdfPage: 57, pageCount: 1, tocPage: 3, settle: "", explain: "340 쪽", attach: "", opinion: "결산검사의견서 134 쪽" },
-  { id: 39, team: "법무팀", category: "소송관리", officer: "이승운", title: "소송에서 패소하여 판결금 또는 소송비용을 지급한 내역은?", docPage: "55", startPdfPage: 58, endPdfPage: 58, pageCount: 1, tocPage: 3, settle: "135 쪽", explain: "342 쪽", attach: "", opinion: "" },
-  { id: 40, team: "법무팀", category: "소송관리", officer: "이승운", title: "법무관리 사업 중 복리후생비 불용액(19,367천원) 발생 사유는?", docPage: "56~57", startPdfPage: 59, endPdfPage: 60, pageCount: 2, tocPage: 3, settle: "135 쪽", explain: "342 쪽", attach: "", opinion: "" },
-  { id: 41, team: "법무팀", category: "소송관리", officer: "이승운", title: "법무관리 사업 추진내용 및 불용액(62,693천원) 발생 사유는?", docPage: "58~59", startPdfPage: 61, endPdfPage: 62, pageCount: 2, tocPage: 3, settle: "135 쪽", explain: "342 쪽", attach: "", opinion: "" }
-];
-
 // Application State
 let currentItems = [];
 let currentPdfDoc = null;
@@ -411,6 +363,9 @@ function locateQuestionsByContent(items, pdfDoc, pageTexts, detectedTocPages) {
     if (item.startPdfPage && item.startPdfPage >= searchStart && item.startPdfPage <= pdfDoc.numPages) {
       foundPage = item.startPdfPage;
       console.log(`Question ${qId} ("${originalTitle.substring(0, 15)}...") directly mapped to PDF page ${foundPage} via printed page ${item.docPage}`);
+    } else if (item.docPage && !isNaN(parseInt(item.docPage, 10)) && printedToPdfMap[parseInt(item.docPage, 10)]) {
+      foundPage = printedToPdfMap[parseInt(item.docPage, 10)];
+      console.log(`Question ${qId} ("${originalTitle.substring(0, 15)}...") mapped to PDF page ${foundPage} via docPage ${item.docPage}`);
     } else {
       for (let p = pageSearchStart; p <= pdfDoc.numPages; p++) {
         const pageInfo = pageCache[p - 1];
@@ -511,8 +466,27 @@ function locateQuestionsByContent(items, pdfDoc, pageTexts, detectedTocPages) {
     curr.pageCount = Math.max(1, curr.endPdfPage - curr.startPdfPage + 1);
 
     // Format docPage based on BOTTOM PRINTED PAGE NUMBER as required
-    const startPrinted = pdfToPrintedMap[curr.startPdfPage] || curr.docPage || curr.startPdfPage;
-    const endPrinted = pdfToPrintedMap[curr.endPdfPage] || startPrinted;
+    let startPrinted = pdfToPrintedMap[curr.startPdfPage];
+    if (!startPrinted) {
+      for (let sp = curr.startPdfPage; sp <= curr.endPdfPage; sp++) {
+        if (pdfToPrintedMap[sp]) {
+          startPrinted = pdfToPrintedMap[sp];
+          break;
+        }
+      }
+    }
+    if (!startPrinted) startPrinted = curr.docPage || curr.startPdfPage;
+
+    let endPrinted = pdfToPrintedMap[curr.endPdfPage];
+    if (!endPrinted) {
+      for (let ep = curr.endPdfPage; ep >= curr.startPdfPage; ep--) {
+        if (pdfToPrintedMap[ep]) {
+          endPrinted = pdfToPrintedMap[ep];
+          break;
+        }
+      }
+    }
+    if (!endPrinted) endPrinted = startPrinted;
 
     if (startPrinted !== endPrinted) {
       curr.docPage = `${startPrinted}~${endPrinted}`;
@@ -556,8 +530,10 @@ function parseTableToc(pageTexts, structure) {
 
   let m;
   let lastCategory = "재무결산 질의";
+  let lastRowEndIndex = 0;
 
   while ((m = rowPattern.exec(combined)) !== null) {
+    lastRowEndIndex = rowPattern.lastIndex;
     const qId = parseInt(m[1], 10);
     const rawTitle = m[2];
     const docPageStr = m[3].trim();
@@ -596,11 +572,12 @@ function parseTableToc(pageTexts, structure) {
     });
   }
 
-  // Also capture annex/appendix sections (자산, 부채, 수익, 비용, 법령, 용어 등)
+  // Also capture annex/appendix sections (자산, 부채, 수익, 비용, 법령, 용어 등) strictly after questions
   if (items.length >= 10) {
-    const sectionRegex = /(자산|부채|수익|비용|법령|용어)\s+([\uAC00-\uD7AF\s\<\>]+?)\s+(\d{1,3})(?=\s+(?:자산|부채|수익|비용|법령|용어)\s+|$)/g;
+    const appendixText = combined.substring(lastRowEndIndex);
+    const sectionRegex = /(자산|부채|수익|비용|법령|용어)\s+([^?？\d\r\n]+?)\s+(\d{1,3})(?=\s+(?:자산|부채|수익|비용|법령|용어)\s+|\s*$)/g;
     let secId = items.length + 1;
-    while ((m = sectionRegex.exec(combined)) !== null) {
+    while ((m = sectionRegex.exec(appendixText)) !== null) {
       const secType = m[1];
       const secName = (m[1] + ' ' + m[2]).trim().replace(/\s+/g, ' ');
       const secDocPageStr = m[3].trim();
@@ -609,6 +586,26 @@ function parseTableToc(pageTexts, structure) {
       let startPdfPage = null;
       if (!isNaN(secDocPageNum) && printedToPdfMap[secDocPageNum]) {
         startPdfPage = printedToPdfMap[secDocPageNum];
+
+        // Check if there is a divider/cover page (간지) immediately preceding this section
+        // e.g. "관 련 법 규" (PDF 119) before printed 111 (PDF 121)
+        // e.g. "재무결산 용어설명" (PDF 147) before printed 139 (PDF 149)
+        if (startPdfPage > 2) {
+          const secKeywords = [secType, ...secName.split(/\s+/)].filter(k => k.length >= 2);
+          let candidateStart = startPdfPage;
+          for (let checkP = startPdfPage - 1; checkP >= Math.max(1, startPdfPage - 4); checkP--) {
+            // Stop if preceding page has a printed footer (it belongs to previous section)
+            if (pdfToPrintedMap[checkP]) break;
+            const pText = (pageTexts[checkP - 1]?.text || '').replace(/\s+/g, '');
+            const matchesKeyword = secKeywords.some(kw => pText.includes(kw) || kw.includes(pText));
+            if (matchesKeyword || pText.length === 0) {
+              candidateStart = checkP;
+            } else {
+              break;
+            }
+          }
+          startPdfPage = candidateStart;
+        }
       }
 
       items.push({
@@ -855,30 +852,25 @@ ${contextText}
     console.log(`Heuristic parser found ${rawParsedItems.length} questions.`);
   }
 
-  // 5. Ultimate Fallback (Only if uploaded file text had zero questions and matches original default file)
+  // 5. Ultimate Fallback (If no questions could be parsed from TOC or body)
   if (!rawParsedItems || rawParsedItems.length === 0) {
-    if (fileName && fileName.includes("0908")) {
-      rawParsedItems = [...defaultItems];
-      structure.tocPages = [2, 3];
-    } else {
-      // Create minimal question items based on pages
-      for (let p = 1; p <= pdfDoc.numPages; p++) {
-        rawParsedItems.push({
-          id: p,
-          team: "",
-          category: "문서 내용",
-          officer: "",
-          title: `${p}쪽 내용`,
-          docPage: `${p}`,
-          startPdfPage: p,
-          endPdfPage: p,
-          pageCount: 1,
-          settle: "",
-          explain: "",
-          attach: "",
-          opinion: ""
-        });
-      }
+    // Create minimal question items based on pages
+    for (let p = 1; p <= pdfDoc.numPages; p++) {
+      rawParsedItems.push({
+        id: p,
+        team: "",
+        category: "문서 내용",
+        officer: "",
+        title: `${p}쪽 내용`,
+        docPage: `${p}`,
+        startPdfPage: p,
+        endPdfPage: p,
+        pageCount: 1,
+        settle: "",
+        explain: "",
+        attach: "",
+        opinion: ""
+      });
     }
   }
 
@@ -896,6 +888,7 @@ ${contextText}
         officer: (item.officer || item.author || "").trim(),
         title: (item.title || "").trim(),
         docPage: (item.docPage ? String(item.docPage).trim() : ""),
+        startPdfPage: item.startPdfPage || null,
         settle: (item.settle ? String(item.settle).trim() : ""),
         explain: (item.explain ? String(item.explain).trim() : ""),
         attach: (item.attach ? String(item.attach).trim() : ""),
