@@ -312,11 +312,16 @@ function locateQuestionsByContent(items, pdfDoc, pageTexts, detectedTocPages) {
     const headerRaw = rawText.substring(0, 600);
     const headerCleanNoSpace = headerRaw.replace(/[\s\(\)\[\]\.\,\?\!\-_·ㆍ•「」『』<>\/\\~○●■▶◆\:\;]/g, '');
 
+    // Detect if this page is a data/table heavy appendix page (e.g. 위원회 현황, 예산 집행 표)
+    const isTableHeavy = /(?:위원회명|집행률|예산액|집행액|불용액|천원|\b\d{1,3},\d{3}\b)/.test(rawText) &&
+      (rawText.match(/\b\d{1,3},\d{3}\b/g) || []).length >= 5;
+
     pageCache.push({
       pageNum: p,
       rawText: rawText,
       cleanNoSpace: cleanNoSpace,
-      headerCleanNoSpace: headerCleanNoSpace
+      headerCleanNoSpace: headerCleanNoSpace,
+      isTableHeavy: isTableHeavy
     });
   }
 
@@ -335,11 +340,19 @@ function locateQuestionsByContent(items, pdfDoc, pageTexts, detectedTocPages) {
     const qId = Number(item.id) || (i + 1);
     const originalTitle = (item.title || "").trim();
 
+    // Strip any residual leading question numbers, bullets, noise from title
+    let pureTitle = originalTitle;
+    while (/^[\s\d\.\-\)\/【】\[\]○●■▶문항]+/.test(pureTitle)) {
+      pureTitle = pureTitle.replace(/^[\s\d\.\-\)\/【】\[\]○●■▶문항]+/, '').trim();
+    }
+    if (!pureTitle) pureTitle = originalTitle;
+    item.title = pureTitle; // Update item title to purified title
+
     // Clean title with no whitespace and no punctuation
-    const titleNoSpace = originalTitle.replace(/[\s\(\)\[\]\.\,\?\!\-_·ㆍ•「」『』<>\/\\~○●■▶◆\:\;]/g, '');
+    const titleNoSpace = pureTitle.replace(/[\s\(\)\[\]\.\,\?\!\-_·ㆍ•「」『』<>\/\\~○●■▶◆\:\;]/g, '');
 
     // Title token words (length >= 2, non-stopwords)
-    const titleTokens = originalTitle
+    const titleTokens = pureTitle
       .replace(/[\s\(\)\[\]\.\,\?\!\-_·ㆍ•「」『』<>\/\\~○●■▶◆\:\;]/g, ' ')
       .split(' ')
       .filter(w => w.length >= 2 && !stopWords.has(w));
@@ -412,12 +425,17 @@ function locateQuestionsByContent(items, pdfDoc, pageTexts, detectedTocPages) {
           else if (matchRatio >= 0.5) score += 250;
           else if (matchRatio >= 0.3 && matchCount >= 2) score += 120;
 
-          score += headerMatchCount * 50;
+          score += headerMatchCount * 100;
         }
 
         // Tier 5: Bracketed question number match
         if (bracketRegex.test(pageInfo.rawText)) {
-          score += 300;
+          score += 400;
+        }
+
+        // Anti-false-positive: Penalize pages that are data-heavy tables if title is not in the header
+        if (pageInfo.isTableHeavy && !pageInfo.headerCleanNoSpace.includes(prefixSnippet)) {
+          score -= 500;
         }
 
         // Track highest scoring page
@@ -655,15 +673,16 @@ function parseQuestionsHeuristic(pageTexts, structure) {
 
   for (const pageObj of targetPages) {
     const text = pageObj.text || "";
-    // Filter out obvious body response prefixes like "점검은...", "월부터..."
+    // Split into chunks by question marks, bracketed items, or linebreaks
     const chunks = text.split(/(?<=[?？])|(?=\[문항\s*\d+\])|\r?\n/);
 
-    for (let chunk of chunks) {
+    for (let c = 0; c < chunks.length; c++) {
+      const chunk = chunks[c];
       const line = chunk.trim();
       if (!line || line.length < 5) continue;
 
       // Detect team keywords (학생배치팀, 조직관리팀, 법무팀 등)
-      const teamMatch = line.match(/([가-힣]{2,6}팀)/);
+      const teamMatch = line.match(/([가-힣]{2,6}(?:팀|과|담당))/);
       if (teamMatch) {
         currentTeam = teamMatch[1];
         currentCategory = teamMatch[1];
@@ -681,13 +700,6 @@ function parseQuestionsHeuristic(pageTexts, structure) {
           cleanTitle = cleanTitle.substring(cleanTitle.indexOf('○') + 1);
         } else if (cleanTitle.includes('【')) {
           cleanTitle = cleanTitle.substring(cleanTitle.indexOf('】') + 1);
-        } else {
-          // Remove leading numbers, brackets, noise
-          cleanTitle = cleanTitle
-            .replace(/^.*?[○●■▶\d\.\)]\s*/, '')
-            .replace(/^[가-힣\s]+의원\s*/, '')
-            .replace(/^[가-힣\s]+팀\s*/, '')
-            .trim();
         }
 
         // Cut trailing officer/team noise after question mark if any
@@ -697,7 +709,15 @@ function parseQuestionsHeuristic(pageTexts, structure) {
           cleanTitle = cleanTitle.substring(0, cleanTitle.lastIndexOf('？') + 1);
         }
 
-        cleanTitle = cleanTitle.trim();
+        // Thoroughly strip ALL leading residual numbers, dots, dashes, brackets, and prefixes (e.g. "4 27. " -> "")
+        while (/^[\s\d\.\-\)\/【】\[\]○●■▶문항]+/.test(cleanTitle)) {
+          cleanTitle = cleanTitle.replace(/^[\s\d\.\-\)\/【】\[\]○●■▶문항]+/, '').trim();
+        }
+
+        cleanTitle = cleanTitle
+          .replace(/^[가-힣\s]{2,5}(?:의원|위원|팀장)\s*/, '')
+          .replace(/^[가-힣\s]{2,6}(?:팀|과|담당)\s*/, '')
+          .trim();
 
         // Avoid duplicates
         if (cleanTitle.length >= 5 && !items.some(it => it.title === cleanTitle)) {
@@ -706,10 +726,31 @@ function parseQuestionsHeuristic(pageTexts, structure) {
           const officerMatch = line.match(/([가-힣]{2,4}\s*의원|언론|현안)/);
           if (officerMatch) officer = officerMatch[1];
 
-          // Try to detect docPage number from line if any
+          // Detect docPage number:
+          // 1) First check inside the line itself (if not strictly cut at ?)
           let docPage = "";
-          const pageMatch = line.match(/(?:쪽수|쪽|p|page)?\s*(\d{1,3})\s*$/i);
-          if (pageMatch) docPage = pageMatch[1];
+          const inlineMatch = line.match(/[?？]\s*(?:쪽수|쪽|p|page)?\s*(\d{1,3})(?:\s*[-~]\s*(\d{1,3}))?/i);
+          if (inlineMatch) {
+            docPage = inlineMatch[2] ? `${inlineMatch[1]}~${inlineMatch[2]}` : inlineMatch[1];
+          }
+
+          // 2) If not found, look at the very beginning of the subsequent chunk(s) (table column for docPage)
+          if (!docPage && c + 1 < chunks.length) {
+            const nextChunk = (chunks[c + 1] || "").trim();
+            const nextMatch = nextChunk.match(/^(?:문서|쪽수|쪽|p|page)?\s*(\d{1,3})(?:\s*[-~]\s*(\d{1,3}))?/i);
+            if (nextMatch) {
+              docPage = nextMatch[2] ? `${nextMatch[1]}~${nextMatch[2]}` : nextMatch[1];
+            }
+          }
+
+          // 3) Direct physical PDF page lookup via printedToPdfMap
+          let startPdfPage = null;
+          if (docPage) {
+            const startNum = parseInt(docPage.split(/[-~]/)[0], 10);
+            if (!isNaN(startNum) && printedToPdfMap[startNum]) {
+              startPdfPage = printedToPdfMap[startNum];
+            }
+          }
 
           items.push({
             id: questionCounter++,
@@ -718,6 +759,7 @@ function parseQuestionsHeuristic(pageTexts, structure) {
             officer: officer,
             title: cleanTitle,
             docPage: docPage,
+            startPdfPage: startPdfPage,
             tocPage: pageObj.pageNum,
             settle: "",
             explain: "",
