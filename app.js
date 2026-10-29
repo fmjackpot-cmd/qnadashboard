@@ -13,6 +13,7 @@ let selectedQuestionId = null;
 let currentQuestion = null;
 let currentViewMode = 'question'; // 'question' | 'toc'
 let currentListViewMode = 'grid'; // 'grid' | 'list'
+let currentListOrder = 'category'; // 'category' | 'number'
 let geminiApiKey = "";
 let tocPages = []; // Detected TOC pages
 let windowDragCounter = 0;
@@ -1059,11 +1060,14 @@ function renderQuestionList() {
     return;
   }
 
-  // Group items by category maintaining original order
+  // Number order uses one ungrouped list without changing document navigation.
   const categoryOrder = [];
-  const groups = {};
-  currentItems.forEach(item => {
-    const cat = item.category || "일반";
+  const groups = Object.create(null);
+  const orderedItems = currentListOrder === 'number'
+    ? [...currentItems].sort((a, b) => Number(a.id) - Number(b.id))
+    : currentItems;
+  orderedItems.forEach(item => {
+    const cat = currentListOrder === 'number' ? '' : (item.category || "일반");
     if (!groups[cat]) {
       groups[cat] = [];
       categoryOrder.push(cat);
@@ -1080,23 +1084,22 @@ function renderQuestionList() {
     if (sidebar) sidebar.classList.remove('mode-title-list');
   }
 
-    categoryOrder.forEach(catName => {
+  categoryOrder.forEach(catName => {
     const items = groups[catName];
     if (!items || items.length === 0) return;
 
     const groupEl = document.createElement('div');
     groupEl.className = 'cat-group';
 
-    // Category Header Bar (Hide duplicate team badge if catName equals teamName)
-    const headerEl = document.createElement('div');
-    headerEl.className = 'cat-header';
-    const teamName = (items[0].team || '').trim();
-    const hasSeparateTeam = teamName && teamName !== catName.trim();
-    headerEl.innerHTML = `
-      <span class="cat-title">${catName}</span>
-      ${hasSeparateTeam ? `<span class="cat-team-badge">${teamName}</span>` : ''}
-    `;
-    groupEl.appendChild(headerEl);
+    if (currentListOrder === 'category') {
+      const headerEl = document.createElement('div');
+      headerEl.className = 'cat-header';
+      const titleEl = document.createElement('span');
+      titleEl.className = 'cat-title';
+      titleEl.textContent = catName;
+      headerEl.appendChild(titleEl);
+      groupEl.appendChild(headerEl);
+    }
 
     if (currentListViewMode === 'grid') {
       // 1) GRID MODE: 3-column Number Buttons
@@ -1180,6 +1183,23 @@ function renderQuestionList() {
 function setupSidebarTabs() {
   const btnGrid = document.getElementById('tab-btn-grid');
   const btnList = document.getElementById('tab-btn-list');
+  const orderButtons = [
+    [document.getElementById('btn-order-category'), 'category'],
+    [document.getElementById('btn-order-number'), 'number']
+  ];
+  orderButtons.forEach(([button, order]) => {
+    if (!button) return;
+    button.onclick = () => {
+      if (currentListOrder === order) return;
+      currentListOrder = order;
+      orderButtons.forEach(([candidate, value]) => {
+        if (!candidate) return;
+        candidate.classList.toggle('active', value === order);
+        candidate.setAttribute('aria-pressed', String(value === order));
+      });
+      renderQuestionList();
+    };
+  });
 
   if (btnGrid && btnList) {
     btnGrid.onclick = () => {
@@ -1809,10 +1829,34 @@ document.addEventListener('DOMContentLoaded', () => {
   // 8. Mobile Sidebar & Quick Navigation Controls
   setupMobileNavigation();
 
-  // 9. Initial State: Do NOT auto-load! Keep upload overlay active.
+  // 9. Hosted deployments can provide a default document.
   renderQuestionList();
-  console.log("대시보드가 초기화 상태로 준비되었습니다. PDF 파일을 선택하거나 드롭해주세요.");
+  const defaultPdf = window.DASHBOARD_CONFIG?.defaultPdf;
+  if (defaultPdf?.url) {
+    loadHostedPdf(defaultPdf);
+  } else {
+    console.log("대시보드가 초기화 상태로 준비되었습니다. PDF 파일을 선택하거나 드롭해주세요.");
+  }
 });
+
+async function loadHostedPdf(defaultPdf) {
+  const overlay = document.getElementById('ai-loading-overlay');
+  const title = document.getElementById('ai-loading-title');
+  const desc = document.getElementById('ai-loading-desc');
+  if (overlay) overlay.style.display = 'flex';
+  if (title) title.innerText = '기본 PDF를 불러오는 중...';
+  if (desc) desc.innerText = defaultPdf.name || '잠시만 기다려주세요.';
+  try {
+    const response = await fetch(defaultPdf.url);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    await loadPdfBuffer(await response.arrayBuffer(), defaultPdf.name);
+  } catch (error) {
+    console.error('기본 PDF 로드 실패:', error);
+    alert('기본 PDF를 불러오지 못했습니다. 새로고침하거나 PDF 파일을 직접 선택해주세요.');
+  } finally {
+    if (overlay) overlay.style.display = 'none';
+  }
+}
 
 // Mobile Sidebar Drawer Functions
 function openMobileSidebar() {

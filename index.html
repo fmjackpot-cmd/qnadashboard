@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>충북교육청 결산 예상질의 스마트 네비게이션 대시보드</title>
+  <title>예상질의 대시보드</title>
   
   <!-- Mobile Fullscreen / Standalone Web App Meta -->
   <meta name="mobile-web-app-capable" content="yes">
@@ -21,7 +21,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.9/pdf-lib.min.js"></script>
 
   <!-- External Stylesheet -->
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=20261029-order">
 </head>
 <body>
 
@@ -51,6 +51,11 @@
           <i class="fa-solid fa-list-ul"></i>
           <span>제목 목록</span>
         </button>
+      </div>
+
+      <div class="sidebar-tabs sidebar-order" role="group" aria-label="질의 정렬 방식">
+        <button class="tab-btn active" id="btn-order-category" aria-pressed="true" title="카테고리별로 모아 보기">카테고리순</button>
+        <button class="tab-btn" id="btn-order-number" aria-pressed="false" title="전체 문항을 번호 오름차순으로 보기">번호순</button>
       </div>
 
       <!-- Question List -->
@@ -140,8 +145,7 @@
           <i class="fa-solid fa-file-pdf"></i>
           <h3>PDF 문서를 드래그하거나 선택해주세요</h3>
           <p>
-            현재 폴더의 <strong>「★★★(최종)2025회계연도 결산 예상질의 답변(0908_v2).pdf」</strong> 파일이나<br>
-            향후 처리할 새 결산/감사 질의서 PDF를 여기에 끌어다 놓으세요.
+            예상질의서 PDF를 여기에 끌어다 놓으세요.
           </p>
           <div class="drop-btn-row">
             <button class="btn-quick-load" id="btn-select-drop">
@@ -217,6 +221,7 @@
   </div>
 
   <!-- External Script -->
-  <script src="app.js?v=20261029" defer></script>
+  <script src="dashboard-config.js?v=20261029" defer></script>
+  <script src="app.js?v=20261029-order" defer></script>
 </body>
 </html>

@@ -121,17 +121,6 @@ aside.sidebar.collapsed {
   white-space: nowrap;
 }
 
-.cat-team-badge {
-  font-size: clamp(0.58rem, 0.95vh, 0.72rem);
-  font-weight: 600;
-  background: rgba(255, 255, 255, 0.22);
-  color: #ffffff;
-  padding: 1px 4px;
-  border-radius: 3px;
-  flex-shrink: 0;
-  margin-left: 3px;
-}
-
 /* Question Number Buttons Grid: Strict 3 items per row */
 .cat-btn-grid {
   display: grid;

@@ -13,3 +13,7 @@ scratch/
 Thumbs.db
 desktop.ini
 
+# Generated Netlify deployment package
+netlify-deploy/
+netlify-deploy.zip
+
