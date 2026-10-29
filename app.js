@@ -194,7 +194,9 @@ async function extractAllPagesText(pdfDoc) {
       // Detect printed page number from footer
       // Patterns: "- 1 -", "- 65 -", "[ 1 ]", "1", "1 / 45"
       let detectedPrintedPage = null;
-      const dashMatch = footerRaw.match(/[-—–]\s*(\d{1,4})\s*[-—–]/);
+      // Some exported PDFs report misplaced footer coordinates but emit it first.
+      const dashMatch = footerRaw.match(/[-—–]\s*(\d{1,4})\s*[-—–]/) ||
+        str.match(/^\s*[-—–]\s*(\d{1,4})\s*[-—–](?=\s|$)/);
       if (dashMatch) {
         detectedPrintedPage = parseInt(dashMatch[1], 10);
       } else {
@@ -311,6 +313,9 @@ function locateQuestionsByContent(items, pdfDoc, pageTexts, detectedTocPages) {
     // Header snippet (first 600 characters) where question title boxes reside
     const headerRaw = rawText.substring(0, 600);
     const headerCleanNoSpace = headerRaw.replace(/[\s\(\)\[\]\.\,\?\!\-_·ㆍ•「」『』<>\/\\~○●■▶◆\:\;]/g, '');
+    const summaryMatch = headerRaw.match(/질\s*의\s*요\s*지\s*([\s\S]{3,300}?)\s*답\s*변\s*내\s*용/);
+    const summaryClean = summaryMatch
+      ? summaryMatch[1].replace(/[^가-힣a-zA-Z0-9]/g, '') : '';
 
     // Detect if this page is a data/table heavy appendix page (e.g. 위원회 현황, 예산 집행 표)
     const isTableHeavy = /(?:위원회명|집행률|예산액|집행액|불용액|천원|\b\d{1,3},\d{3}\b)/.test(rawText) &&
@@ -321,6 +326,7 @@ function locateQuestionsByContent(items, pdfDoc, pageTexts, detectedTocPages) {
       rawText: rawText,
       cleanNoSpace: cleanNoSpace,
       headerCleanNoSpace: headerCleanNoSpace,
+      summaryClean,
       isTableHeavy: isTableHeavy
     });
   }
@@ -342,17 +348,17 @@ function locateQuestionsByContent(items, pdfDoc, pageTexts, detectedTocPages) {
 
     // Strip any residual leading question numbers, bullets, noise from title
     let pureTitle = originalTitle;
-    while (/^[\s\d\.\-\)\/【】\[\]○●■▶문항]+/.test(pureTitle)) {
-      pureTitle = pureTitle.replace(/^[\s\d\.\-\)\/【】\[\]○●■▶문항]+/, '').trim();
-    }
+    pureTitle = pureTitle.replace(/^(?:【\s*(?:문항\s*)?\d+\s*】|\[\s*문항\s*\d+\s*\]|\d{1,3}[.)]\s+)?\s*[○●■▶]?\s*/, '').trim();
     if (!pureTitle) pureTitle = originalTitle;
     item.title = pureTitle; // Update item title to purified title
 
     // Clean title with no whitespace and no punctuation
-    const titleNoSpace = pureTitle.replace(/[\s\(\)\[\]\.\,\?\!\-_·ㆍ•「」『』<>\/\\~○●■▶◆\:\;]/g, '');
+    // Planning-period labels are TOC metadata and may be absent from body headings.
+    const matchTitle = pureTitle.replace(/^\(\s*중기\s*\)\s*/, '');
+    const titleNoSpace = matchTitle.replace(/[\s\(\)\[\]\.\,\?\!\-_·ㆍ•「」『』<>\/\\~○●■▶◆\:\;]/g, '');
 
     // Title token words (length >= 2, non-stopwords)
-    const titleTokens = pureTitle
+    const titleTokens = matchTitle
       .replace(/[\s\(\)\[\]\.\,\?\!\-_·ㆍ•「」『』<>\/\\~○●■▶◆\:\;]/g, ' ')
       .split(' ')
       .filter(w => w.length >= 2 && !stopWords.has(w));
@@ -385,6 +391,13 @@ function locateQuestionsByContent(items, pdfDoc, pageTexts, detectedTocPages) {
         if (!pageInfo || pageInfo.cleanNoSpace.length < 20) continue;
 
         let score = 0;
+
+        // Body summaries sometimes omit the school name used in the TOC.
+        // An explicit question heading is stronger evidence than shared answer keywords.
+        const normalizedTitle = titleNoSpace.replace(/[^가-힣a-zA-Z0-9]/g, '');
+        if (pageInfo.summaryClean.length >= 6 && normalizedTitle.endsWith(pageInfo.summaryClean)) {
+          score += 1600;
+        }
 
         // Tier 1: Complete title match (ignoring whitespace and punctuation)
         if (titleNoSpace.length >= 5 && pageInfo.cleanNoSpace.includes(titleNoSpace)) {
@@ -647,7 +660,67 @@ function parseTableToc(pageTexts, structure) {
 }
 
 // Built-in intelligent client-side text parser (when AI key is not set or failed)
+// Three-column TOCs have no page column: [번호 | 예상질의·답변 | 담당자].
+// Parse complete rows so headers and the previous row's officer cannot enter a title.
+function parseOfficerToc(pageTexts, structure) {
+  const items = [];
+  for (const page of pageTexts.filter(p => (structure.tocPages || []).includes(p.pageNum))) {
+    const text = (page.text || '').replace(/\u0000/g, '');
+    const header = /번\s*호\s+예\s*상\s*질\s*의\s*[·ㆍ․]?\s*답\s*변\s+담\s*당\s*자/.exec(text);
+    if (!header) continue;
+    const rowsText = text.slice(header.index + header[0].length)
+      .replace(/\s*[-—–]\s*\d+\s*[-—–]\s*$/, '').trim();
+    const rowPattern = /(?:^|\s)(\d{1,3})\s*([^?？]{3,250}[?？])\s*([가-힣]{2,4})(?=\s+\d{1,3}\s*|\s*$)/g;
+    const rows = [...rowsText.matchAll(rowPattern)];
+    // Only accept a fully recognized table; leave other layouts to existing parsers.
+    if (!rows.length || rowsText.replace(rowPattern, '').trim()) return [];
+    for (const row of rows) {
+      const id = Number(row[1]);
+      if (items.length && id !== items[items.length - 1].id + 1) return [];
+      items.push({
+        id, title: row[2].replace(/\s+/g, ' ').trim(), officer: row[3],
+        team: '', category: '일반', docPage: '', startPdfPage: null,
+        tocPage: page.pageNum, settle: '', explain: '', attach: '', opinion: ''
+      });
+    }
+  }
+  return items;
+}
+
+// Audit TOCs use numbered bullet rows and explicit category/team/page columns.
+// A title may contain several questions, or no question mark at all.
+function parseAuditToc(pageTexts, structure) {
+  const items = [];
+  for (const page of pageTexts.filter(p => (structure.tocPages || []).includes(p.pageNum))) {
+    const header = /순\s+제\s*목\s+구\s*분\s+팀\s+쪽\s*수/.exec(page.text || '');
+    if (!header) return [];
+    const rowsText = page.text.slice(header.index + header[0].length).trim();
+    const starts = [...rowsText.matchAll(/(?:^|\s)(\d{1,3})\s+○\s*/g)];
+    if (!starts.length || rowsText.slice(0, starts[0].index).trim()) return [];
+    for (let i = 0; i < starts.length; i++) {
+      const id = Number(starts[i][1]);
+      if (id !== items.length + 1) return [];
+      const row = rowsText.slice(starts[i].index + starts[i][0].length,
+        i + 1 < starts.length ? starts[i + 1].index : rowsText.length).trim();
+      const columns = /^([\s\S]+?)\s+(?:(?<officer>[가-힣]{2,4}\s+의원)\s+)?(?<category>서면질의|공통\s*요구자료|요구자료|현안|기타|언론)\s+(?<team>[가-힣]+팀)\s+(?<page>\d{1,4})$/.exec(row);
+      if (!columns) return [];
+      const docPage = columns.groups.page;
+      items.push({ id, title: columns[1].replace(/\s+/g, ' ').trim(),
+        officer: (columns.groups.officer || '').replace(/\s+/g, ' '),
+        category: columns.groups.category.replace(/\s+/g, ' '), team: columns.groups.team,
+        docPage, startPdfPage: printedToPdfMap[Number(docPage)] || null,
+        tocPage: page.pageNum, settle: '', explain: '', attach: '', opinion: '' });
+    }
+  }
+  return items;
+}
+
 function parseQuestionsHeuristic(pageTexts, structure) {
+  const auditItems = parseAuditToc(pageTexts, structure);
+  if (auditItems.length) return auditItems;
+  const officerItems = parseOfficerToc(pageTexts, structure);
+  if (officerItems.length) return officerItems;
+
   // 1. Check if TOC matches standard 4-column Table format (e.g. 재무결산 질의서)
   const targetPages = (structure.tocPages && structure.tocPages.length > 0)
     ? pageTexts.filter(p => structure.tocPages.includes(p.pageNum))
@@ -794,10 +867,12 @@ async function parseUploadedPdf(pdfDoc, fileName) {
   const structure = analyzeDocumentStructure(pageTexts);
   tocPages = structure.tocPages;
 
-  let rawParsedItems = [];
+  // Use validated rows directly for this explicit layout, with or without an AI key.
+  let rawParsedItems = parseAuditToc(pageTexts, structure);
+  if (!rawParsedItems.length) rawParsedItems = parseOfficerToc(pageTexts, structure);
 
   // 3. AI Parsing with Multi-Model Fallback (3.5-flash-lite -> 3.5-flash -> flash-latest)
-  if (geminiApiKey) {
+  if (geminiApiKey && rawParsedItems.length === 0) {
     const candidateModels = [
       "gemini-3.5-flash-lite",
       "gemini-3.5-flash",
