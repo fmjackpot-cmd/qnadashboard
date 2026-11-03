@@ -32,6 +32,7 @@ Windows PowerShell에서 `pnpm`을 찾지 못하면 프로젝트 폴더에서 �
 
 - 단위·회귀 테스트: `node --test tests/parser.test.cjs`
 - 실제 PDF 통합 테스트: `node tests/pdf-integration.cjs <pdf.js-3.11.174의-pdf.cjs-절대경로> <pdf.worker.cjs-절대경로>`
+- 통합 검증에 필요한 원본 PDF 2개는 `tests/fixtures/pdfs/`에 보관합니다. 그 외 참고 PDF는 로컬의 `local-archive/reference-pdfs/`로 옮겼으며 Git과 배포 패키지에는 포함하지 않습니다.
 - PDF.js는 index.html과 같은 3.11.174 버전을 사용합니다. CDN의 pdf.min.js와 pdf.worker.min.js를 각각 .cjs 파일로 저장해 경로를 전달합니다.
 
 2026-10-29 검증 결과: 회귀 테스트 5개 통과. 행정사무감사 PDF 120쪽의 47개 문항 시작·끝 쪽수 모두 목차와 일치. 공유재산관리계획 PDF 14쪽의 10개 문항 시작 쪽수 일치. API 키가 설정된 경우에도 두 표 형식은 외부 AI 호출 없이 분석됨.

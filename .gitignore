@@ -5,6 +5,7 @@
 
 # Temporary / Scratch files
 scratch/
+local-archive/
 *.tmp
 *.log
 
