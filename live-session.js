@@ -277,6 +277,8 @@
       });
       return sdkLoading;
     };
+    let roleMode = 'viewer';
+    let pendingStartFile = null;
     const session = new MeetingSession({
       request,
       getTarget: () => root.DashboardMeeting.getTarget(),
@@ -304,6 +306,10 @@
         button.title = `${session?.active ? `회의 ${session.room} · ` : ''}${status.textContent} · 클릭하여 회의 설정`;
         button.ariaLabel = button.title;
         el('meeting-leave').hidden = !session?.active;
+        el('meeting-sharing').hidden = !session?.active || session.role !== 'admin' || roleMode !== 'admin';
+        el('start-status').dataset.state = kind;
+        el('start-status').textContent = kind === 'offline'
+          ? '참여자는 별도의 PDF 파일이나 관리자 키가 필요하지 않습니다.' : status.textContent;
       }
     });
     const shareLink = room => {
@@ -326,25 +332,48 @@
       url.searchParams.set('room', room);
       history.replaceState(null, '', url);
     };
-    el('meeting-open').onclick = () => {
-      el('meeting-error').textContent = '';
-      el('meeting-room').value = session.room || new URL(location.href).searchParams.get('room') || 'meeting';
-      dialog.showModal();
+    const setRole = role => {
+      roleMode = role === 'admin' ? 'admin' : 'viewer';
+      el('meeting-heading').textContent = roleMode === 'admin' ? '관리자로 시작하기' : '회의 참여하기';
+      el('meeting-admin-fields').hidden = roleMode !== 'admin';
+      el('meeting-admin-fields').disabled = roleMode !== 'admin';
+      el('meeting-viewer').hidden = roleMode === 'admin';
+      el('meeting-key').required = roleMode === 'admin';
+      el('meeting-role-admin').ariaPressed = String(roleMode === 'admin');
+      el('meeting-role-viewer').ariaPressed = String(roleMode === 'viewer');
+      el('meeting-sharing').hidden = !session.active || session.role !== 'admin' || roleMode !== 'admin';
     };
+    const openMeeting = (role, file = null) => {
+      setRole(role);
+      pendingStartFile = file;
+      el('meeting-pdf').value = '';
+      el('meeting-pdf-hint').textContent = file ? `선택한 자료: ${file.name} · 관리자 인증 후 업로드합니다.`
+        : 'PDF를 선택하면 업로드 후 회의가 시작됩니다. 이미 문서가 열려 있다면 해당 PDF를 사용할 수 있습니다.';
+      el('meeting-error').textContent = '';
+      el('meeting-room').value = session.room || new URL(location.href).searchParams.get('room') || (roleMode === 'admin' ? 'meeting' : '');
+      dialog.showModal();
+      el('meeting-room').focus?.();
+    };
+    el('meeting-open').onclick = () => openMeeting(session.active ? session.role : roleMode);
+    el('start-admin').onclick = () => openMeeting('admin');
+    el('start-viewer').onclick = () => openMeeting('viewer');
+    el('meeting-role-admin').onclick = () => setRole('admin');
+    el('meeting-role-viewer').onclick = () => setRole('viewer');
     el('meeting-close').onclick = () => dialog.close();
     dialog.addEventListener('close', () => { el('meeting-key').value = ''; });
     form.onsubmit = async event => {
       event.preventDefault();
       const room = el('meeting-room').value.trim();
-      const admin = event.submitter?.id === 'meeting-admin';
+      const admin = roleMode === 'admin';
       const key = admin ? el('meeting-key').value.trim() : '';
       if (admin && !key) { el('meeting-error').textContent = '관리자 인증키를 입력해주세요.'; return; }
       const buttons = form.querySelectorAll('button[type="submit"]');
       buttons.forEach(button => { button.disabled = true; });
       try {
-        const file = admin ? el('meeting-pdf').files?.[0] || root.DashboardMeeting.getFile() : null;
+        const file = admin ? el('meeting-pdf').files?.[0] || pendingStartFile || root.DashboardMeeting.getFile() : null;
         await join(room, key, file);
         el('meeting-pdf').value = '';
+        pendingStartFile = null;
         dialog.close();
       } catch (error) { el('meeting-error').textContent = error.message; }
       finally { buttons.forEach(button => { button.disabled = false; }); }
@@ -367,15 +396,25 @@
     };
     root.addEventListener('dashboard-navigation', event => session.navigate(event.detail));
     root.addEventListener('dashboard-document-ready', () => {
+      const shell = el('dashboard-shell');
+      shell.dataset.starting = 'false';
+      shell.inert = false;
+      shell.ariaHidden = 'false';
       // A newly opened local document must not suppress the next admin move.
       if (session.active && session.role === 'viewer') session.browsing = true;
       if (session.active && session.role === 'viewer') session.applyPending();
     });
     root.MeetingFiles = {
+      startWithFile(file) {
+        if (root.DashboardMeeting.getDocument().ready || session.active) return false;
+        openMeeting('admin', file);
+        return true;
+      },
       isAdmin: () => session.active && session.role === 'admin',
       async share(file) {
         try { return await session.shareFile(file); }
         catch (error) {
+          setRole('admin');
           el('meeting-error').textContent = error.message;
           if (!dialog.open) dialog.showModal();
           throw error;
@@ -391,6 +430,7 @@
     root.addEventListener('pageshow', event => {
       if (event.persisted && session.active && session.role === 'viewer') join(session.room, '').catch(error => session.onStatus('error', error.message));
     });
+    setRole('viewer');
     session.onStatus('offline');
     const room = new URL(location.href).searchParams.get('room');
     if (room) join(room, '').catch(error => session.onStatus('error', error.message));

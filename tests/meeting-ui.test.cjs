@@ -42,7 +42,15 @@ test('meeting form authenticates, clears the key field, and shares a viewer URL 
   context.window = context;
   vm.runInNewContext(fs.readFileSync('live-session.js', 'utf8'), context);
   listeners.DOMContentLoaded();
-  elements.get('meeting-open').onclick();
+  elements.get('start-viewer').onclick();
+  assert.equal(elements.get('meeting-admin-fields').hidden, true);
+  assert.equal(elements.get('meeting-admin-fields').disabled, true);
+  assert.equal(elements.get('meeting-viewer').hidden, false);
+  assert.equal(elements.get('meeting-room').value, '');
+  elements.get('start-admin').onclick();
+  assert.equal(elements.get('meeting-admin-fields').hidden, false);
+  assert.equal(elements.get('meeting-admin-fields').disabled, false);
+  assert.equal(elements.get('meeting-viewer').hidden, true);
   elements.get('meeting-room').value = 'audit-2026';
   elements.get('meeting-key').value = 'test-only-key-never-share-this';
   await elements.get('meeting-form').onsubmit({ preventDefault() {}, submitter: { id: 'meeting-admin' } });
@@ -54,6 +62,9 @@ test('meeting form authenticates, clears the key field, and shares a viewer URL 
   assert.equal(writes[1].body, pdf);
   assert.equal(writes[2].body.action, 'set-document');
   assert.equal(writes[2].body.questionId, 3);
+  listeners['dashboard-document-ready']();
+  assert.equal(elements.get('dashboard-shell').dataset.starting, 'false');
+  assert.equal(elements.get('dashboard-shell').inert, false);
   await elements.get('meeting-copy').onclick();
   assert.equal(copied, 'https://dashboard.example/index.html?room=audit-2026');
   assert.ok(!copied.includes('key'));

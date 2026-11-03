@@ -21,12 +21,12 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.9/pdf-lib.min.js"></script>
 
   <!-- External Stylesheet -->
-  <link rel="stylesheet" href="style.css?v=20261103-shared-pdf">
+  <link rel="stylesheet" href="style.css?v=20261103-start-roles">
 </head>
 <body>
 
   <!-- Main Container (Full Height 100vh) -->
-  <div class="main-container">
+  <div class="main-container" id="dashboard-shell" data-starting="true" inert aria-hidden="true">
     
     <!-- Mobile Sidebar Backdrop -->
     <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
@@ -143,23 +143,31 @@
         <!-- Rendered Pages will appear here -->
       </div>
 
-      <!-- Upload Screen Overlay -->
-      <div class="upload-overlay" id="upload-overlay">
-        <div class="drop-zone" id="drop-zone">
-          <i class="fa-solid fa-file-pdf"></i>
-          <h3>PDF 문서를 드래그하거나 선택해주세요</h3>
-          <p>
-            예상질의서 PDF를 여기에 끌어다 놓으세요.
-          </p>
-          <div class="drop-btn-row">
-            <button class="btn-quick-load" id="btn-select-drop">
-              <i class="fa-solid fa-folder-open"></i> 내 PC에서 파일 선택
-            </button>
-          </div>
-        </div>
-      </div>
     </main>
   </div>
+
+  <section class="upload-overlay start-screen" id="upload-overlay" aria-labelledby="start-heading">
+    <div class="start-panel">
+      <span class="start-brand"><i class="fa-solid fa-layer-group" aria-hidden="true"></i> 예상질의 대시보드</span>
+      <h1 id="start-heading">회의를 시작하세요</h1>
+      <p class="start-description">관리자로 자료를 공유하거나, 진행 중인 회의에 참여하세요.</p>
+      <div class="start-options">
+        <button type="button" class="start-option start-option-admin" id="start-admin" aria-haspopup="dialog" aria-controls="meeting-dialog">
+          <span class="start-option-icon"><i class="fa-solid fa-user-shield" aria-hidden="true"></i></span>
+          <strong>관리자로 시작하기</strong>
+          <span>PDF를 업로드하고<br>회의 화면을 진행합니다.</span>
+          <span class="start-option-link">회의 개설 <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></span>
+        </button>
+        <button type="button" class="start-option" id="start-viewer" aria-haspopup="dialog" aria-controls="meeting-dialog">
+          <span class="start-option-icon"><i class="fa-solid fa-users" aria-hidden="true"></i></span>
+          <strong>회의 참여하기</strong>
+          <span>회의 코드를 입력하면<br>자료가 자동으로 열립니다.</span>
+          <span class="start-option-link">회의 입장 <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></span>
+        </button>
+      </div>
+      <p id="start-status" class="start-status" role="status" aria-live="polite">참여자는 별도의 PDF 파일이나 관리자 키가 필요하지 않습니다.</p>
+    </div>
+  </section>
 
   <!-- Toast Notification (Disabled) -->
   <div class="toast" id="toast">
@@ -231,6 +239,10 @@
       <button type="button" id="meeting-close" aria-label="회의 설정 닫기">닫기</button>
     </div>
     <p>각자 문항을 열람하다가도 관리자가 이동하면 해당 문항이 우선 표시됩니다. 확대와 스크롤은 각자 조절합니다.</p>
+    <div class="meeting-role-switch" role="group" aria-label="회의 역할 선택">
+      <button type="button" id="meeting-role-admin" aria-pressed="false">관리자</button>
+      <button type="button" id="meeting-role-viewer" aria-pressed="true">참여자</button>
+    </div>
     <p id="meeting-status" class="meeting-status" role="status" aria-live="polite">개별 열람</p>
     <div class="meeting-actions">
       <button type="button" id="meeting-return" hidden>관리자 화면으로</button>
@@ -239,24 +251,28 @@
     <form id="meeting-form">
       <label for="meeting-room">회의 코드</label>
       <input id="meeting-room" name="room" maxlength="64" pattern="[a-zA-Z0-9_\-]{1,64}" required autocomplete="off" placeholder="예: audit-2026">
-      <button type="submit" id="meeting-viewer">이용자로 연결</button>
-      <label for="meeting-key">관리자 인증키 <small>관리자만 입력</small></label>
+      <button type="submit" id="meeting-viewer">회의 참여하기</button>
+      <fieldset id="meeting-admin-fields" hidden disabled>
+      <label for="meeting-key">관리자 인증키</label>
       <input id="meeting-key" type="password" autocomplete="off" placeholder="서버에 설정한 관리자 인증키 (6자 이상)">
       <label for="meeting-pdf">회의 PDF <small>관리자만 선택 · 최대 4.5MB</small></label>
       <input id="meeting-pdf" type="file" accept="application/pdf,.pdf">
-      <p class="meeting-pdf-hint">선택한 PDF를 업로드한 뒤 회의를 시작합니다. 선택하지 않으면 현재 열린 PDF를 사용합니다. 회의 중에는 상단 파일 열기로 자료를 교체할 수 있습니다.</p>
+      <p class="meeting-pdf-hint" id="meeting-pdf-hint">PDF를 선택하면 업로드 후 회의가 시작됩니다. 이미 문서가 열려 있다면 해당 PDF를 사용할 수 있습니다.</p>
       <button type="submit" id="meeting-admin">PDF 업로드 후 회의 시작</button>
+      </fieldset>
     </form>
+    <div id="meeting-sharing" hidden>
     <label for="meeting-link">이용자 접속 주소</label>
     <div class="meeting-share">
       <input id="meeting-link" type="text" readonly placeholder="회의 연결 후 표시됩니다">
       <button type="button" id="meeting-copy">복사</button>
     </div>
+    </div>
     <p id="meeting-error" role="status" aria-live="polite"></p>
     <button type="button" id="meeting-leave" hidden>회의 연결 해제</button>
   </dialog>
   <script src="dashboard-config.js?v=20261103-empty-start" defer></script>
-  <script src="app.js?v=20261103-empty-start" defer></script>
-  <script src="live-session.js?v=20261103-shared-pdf" defer></script>
+  <script src="app.js?v=20261103-start-roles" defer></script>
+  <script src="live-session.js?v=20261103-start-roles" defer></script>
 </body>
 </html>

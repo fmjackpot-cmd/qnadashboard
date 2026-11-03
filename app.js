@@ -1556,12 +1556,6 @@ async function loadPdfBufferNow(buffer, fileName, hosted = false) {
     const loadingTask = pdfjsLib.getDocument({ data: uint8 });
     currentPdfDoc = await loadingTask.promise;
     
-    // Hide upload overlay
-    const uploadOverlay = document.getElementById('upload-overlay');
-    if (uploadOverlay) {
-      uploadOverlay.style.display = 'none';
-    }
-
     // Dynamic Adaptive Parsing for Uploaded PDF
     await parseUploadedPdf(currentPdfDoc, fileName);
 
@@ -1576,6 +1570,8 @@ async function loadPdfBufferNow(buffer, fileName, hosted = false) {
       await openTocView(true, false);
     }
     meetingDocument.ready = true;
+    const uploadOverlay = document.getElementById('upload-overlay');
+    if (uploadOverlay) uploadOverlay.style.display = 'none';
     window.dispatchEvent(new CustomEvent('dashboard-document-ready'));
     return true;
   } catch (err) {
@@ -1597,6 +1593,7 @@ function processPdfFile(file) {
     return;
   }
 
+  if (window.MeetingFiles?.startWithFile(file)) return;
   if (window.MeetingFiles?.isAdmin()) {
     window.MeetingFiles.share(file).catch(() => {});
     return;
