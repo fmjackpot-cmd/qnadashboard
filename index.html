@@ -21,7 +21,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.9/pdf-lib.min.js"></script>
 
   <!-- External Stylesheet -->
-  <link rel="stylesheet" href="style.css?v=20261103-ably">
+  <link rel="stylesheet" href="style.css?v=20261103-meeting-button">
 </head>
 <body>
 
@@ -96,6 +96,10 @@
           </div>
 
           <!-- TOC View Button -->
+          <button type="button" class="btn-tool btn-meeting" id="meeting-open" data-state="offline" title="회의 연결 및 설정" aria-label="회의 연결 및 설정" aria-haspopup="dialog" aria-controls="meeting-dialog">
+            <i class="fa-solid fa-users" aria-hidden="true"></i>
+            <span class="btn-text-responsive">회의</span>
+          </button>
           <button class="btn-tool btn-tool-toc" id="btn-show-toc" title="전체 목차를 세로 스크롤로 연속 열람합니다">
             <i class="fa-solid fa-list-check"></i>
             <span class="btn-text-responsive">목차 보기</span>
@@ -135,14 +139,6 @@
       </div>
 
       <!-- PDF Viewport -->
-      <div class="meeting-bar" aria-label="실시간 회의">
-        <span id="meeting-status" role="status" aria-live="polite">개별 열람</span>
-        <div class="meeting-actions">
-          <button type="button" id="meeting-return" hidden>관리자 화면으로</button>
-          <button type="button" id="meeting-send" hidden>현재 화면 전송</button>
-          <button type="button" id="meeting-open">회의 연결</button>
-        </div>
-      </div>
       <div class="pdf-viewport" id="pdf-viewport">
         <!-- Rendered Pages will appear here -->
       </div>
@@ -235,6 +231,11 @@
       <button type="button" id="meeting-close" aria-label="회의 설정 닫기">닫기</button>
     </div>
     <p>각자 문항을 열람하다가도 관리자가 이동하면 해당 문항이 우선 표시됩니다. 확대와 스크롤은 각자 조절합니다.</p>
+    <p id="meeting-status" class="meeting-status" role="status" aria-live="polite">개별 열람</p>
+    <div class="meeting-actions">
+      <button type="button" id="meeting-return" hidden>관리자 화면으로</button>
+      <button type="button" id="meeting-send" hidden>현재 화면 전송</button>
+    </div>
     <form id="meeting-form">
       <label for="meeting-room">회의 코드</label>
       <input id="meeting-room" name="room" maxlength="64" pattern="[a-zA-Z0-9_\-]{1,64}" required autocomplete="off" placeholder="예: audit-2026">
@@ -253,6 +254,6 @@
   </dialog>
   <script src="dashboard-config.js?v=20261029" defer></script>
   <script src="app.js?v=20261103-ably" defer></script>
-  <script src="live-session.js?v=20261103-ably" defer></script>
+  <script src="live-session.js?v=20261103-meeting-button" defer></script>
 </body>
 </html>

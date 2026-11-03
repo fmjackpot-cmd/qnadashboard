@@ -254,7 +254,10 @@
         status.dataset.state = kind;
         el('meeting-send').hidden = !session?.active || session.role !== 'admin';
         el('meeting-return').hidden = !session?.active || session.role !== 'viewer' || !session.browsing;
-        el('meeting-open').textContent = session?.active ? `회의 ${session.room}` : '회의 연결';
+        const button = el('meeting-open');
+        button.dataset.state = kind;
+        button.title = `${session?.active ? `회의 ${session.room} · ` : ''}${status.textContent} · 클릭하여 회의 설정`;
+        button.ariaLabel = button.title;
         el('meeting-leave').hidden = !session?.active;
       }
     });

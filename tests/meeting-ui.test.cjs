@@ -42,6 +42,8 @@ test('meeting form authenticates, clears the key field, and shares a viewer URL 
   await elements.get('meeting-form').onsubmit({ preventDefault() {}, submitter: { id: 'meeting-admin' } });
   assert.equal(elements.get('meeting-key').value, '');
   assert.equal(elements.get('meeting-send').hidden, false);
+  assert.equal(elements.get('meeting-open').dataset.state, 'admin');
+  assert.match(elements.get('meeting-open').title, /관리자 제어 중/);
   assert.equal(writes[0].body.action, 'authenticate');
   assert.equal(writes[1].body.questionId, 3);
   await elements.get('meeting-copy').onclick();
@@ -49,6 +51,7 @@ test('meeting form authenticates, clears the key field, and shares a viewer URL 
   assert.ok(!copied.includes('key'));
   elements.get('meeting-leave').onclick();
   assert.equal(elements.get('meeting-send').hidden, true);
+  assert.equal(elements.get('meeting-open').dataset.state, 'offline');
   assert.ok(!location.href.includes('room='));
 });
 
