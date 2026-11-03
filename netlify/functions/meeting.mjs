@@ -1,4 +1,5 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { documentInfo, validFileId } from '../lib/meeting-documents.mjs';
 
 const json = (data, status = 200) => new Response(JSON.stringify(data), {
   status,
@@ -9,7 +10,7 @@ const roomPattern = /^[a-zA-Z0-9_-]{1,64}$/;
 const maxAge = 12 * 60 * 60 * 1000;
 
 // Dependencies are injectable so authorization and persistence can be checked locally.
-export function createHandler({ store, adminKey, broker, now = Date.now, revision = randomUUID }) {
+export function createHandler({ store, documents, adminKey, broker, now = Date.now, revision = randomUUID }) {
   return async request => {
     if (!['GET', 'POST'].includes(request.method)) return json({ error: '허용되지 않은 요청입니다.' }, 405);
     if (!adminKey || adminKey.length < 6) return json({ error: '서버에 MEETING_ADMIN_KEY(6자 이상)를 설정하고 다시 배포해주세요.' }, 503);
@@ -39,8 +40,18 @@ export function createHandler({ store, adminKey, broker, now = Date.now, revisio
         return json({ error: '문서 또는 문항 정보가 올바르지 않습니다.' }, 400);
       }
       const previous = await store.get(room, { type: 'json', consistency: 'strong' });
+      let document = previous?.document;
+      if (body.action === 'set-document') {
+        if (!documents || !validFileId(body.fileId)) return json({ error: '먼저 회의 자료를 업로드해주세요.' }, 400);
+        const entry = await documents.getMetadata(body.fileId, { consistency: 'strong' });
+        if (!entry || entry.metadata.room !== room || entry.metadata.id !== body.documentId) return json({ error: '업로드한 회의 자료가 일치하지 않습니다.' }, 400);
+        document = documentInfo(room, body.fileId, entry.metadata);
+      } else if (document && document.id !== body.documentId) {
+        return json({ error: '회의 자료로 업로드한 PDF에서 문항을 선택해주세요.' }, 409);
+      }
       const state = { revision: revision(), sequence: (previous?.sequence || 0) + 1, updatedAt: now(), documentId: body.documentId,
         mode: body.mode, questionId: body.mode === 'question' ? body.questionId : null };
+      if (document) state.document = document;
       await store.setJSON(room, state);
       await broker.publish(room, state);
       return json({ state });
@@ -59,7 +70,8 @@ export default async request => {
     const namespace = process.env.CONTEXT === 'production' ? 'production' : (process.env.DEPLOY_ID || 'local');
     const store = getStore({ name: `dashboard-meetings-${namespace}`, consistency: 'strong' });
     const broker = process.env.ABLY_API_KEY ? createBroker({ apiKey: process.env.ABLY_API_KEY, namespace }) : null;
-    return await createHandler({ store, adminKey: process.env.MEETING_ADMIN_KEY, broker })(request);
+    const documents = getStore({ name: `dashboard-documents-${namespace}`, consistency: 'strong' });
+    return await createHandler({ store, documents, adminKey: process.env.MEETING_ADMIN_KEY, broker })(request);
   } catch {
     return json({ error: 'Netlify 회의 저장소를 사용할 수 없습니다. 서버 설정을 확인해주세요.' }, 503);
   }

@@ -175,7 +175,7 @@ test('viewers cannot publish, and admins cannot transmit unshared local PDFs', a
   await admin.client.join('room', key);
   await admin.client.navigate(target(2));
   assert.equal(records.size, 0);
-  assert.match(admin.statuses.at(-1).message, /공통 PDF/);
+  assert.match(admin.statuses.at(-1).message, /업로드/);
 });
 
 test('server rejects invalid credentials, cross-site writes, malformed input, and missing configuration', async () => {

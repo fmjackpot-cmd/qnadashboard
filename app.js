@@ -19,6 +19,8 @@ let tocPages = []; // Detected TOC pages
 let windowDragCounter = 0;
 let viewRenderRevision = 0;
 let meetingDocument = { ready: false, hosted: false, id: null };
+let pdfLoadQueue = Promise.resolve();
+let documentLoadRevision = 0;
 
 function announceNavigation(mode, questionId = null) {
   window.dispatchEvent(new CustomEvent('dashboard-navigation', { detail: { mode, questionId } }));
@@ -26,9 +28,13 @@ function announceNavigation(mode, questionId = null) {
 
 window.DashboardMeeting = {
   getDocument: () => ({ ...meetingDocument }),
+  getFile: () => currentPdfBytes && meetingDocument.ready ? new File([currentPdfBytes], currentPdfFileName, { type: 'application/pdf' }) : null,
   getTarget: () => ({ mode: currentViewMode, questionId: currentViewMode === 'question' ? Number(selectedQuestionId) : null }),
+  showDocument: document => loadSharedPdf(document),
   async showTarget(state) {
-    if (!meetingDocument.hosted) {
+    if (state.document && (!meetingDocument.hosted || meetingDocument.id !== state.documentId || meetingDocument.shared?.fileId !== state.document.fileId)) {
+      await loadSharedPdf(state.document);
+    } else if (!state.document && !meetingDocument.hosted) {
       const pdf = window.DASHBOARD_CONFIG?.defaultPdf;
       if (!pdf?.url) throw new Error('관리자와 같은 공통 PDF가 필요합니다. 배포된 주소에서 접속해주세요.');
       await loadHostedPdf(pdf);
@@ -1522,6 +1528,12 @@ function applyZoom(newScale) {
 // ==========================================================================
 
 async function loadPdfBuffer(buffer, fileName, hosted = false) {
+  const task = pdfLoadQueue.catch(() => {}).then(() => loadPdfBufferNow(buffer, fileName, hosted));
+  pdfLoadQueue = task;
+  return task;
+}
+
+async function loadPdfBufferNow(buffer, fileName, hosted = false) {
   if (!buffer || buffer.byteLength === 0) {
     alert("선택한 파일이 비어있습니다.");
     return;
@@ -1567,9 +1579,11 @@ async function loadPdfBuffer(buffer, fileName, hosted = false) {
     }
     meetingDocument.ready = true;
     window.dispatchEvent(new CustomEvent('dashboard-document-ready'));
+    return true;
   } catch (err) {
     console.error("Error loading PDF:", err);
     alert("PDF 파일을 불러오는 중 오류가 발생했습니다: " + (err && err.message ? err.message : err));
+    return false;
   }
 }
 
@@ -1582,6 +1596,11 @@ function processPdfFile(file) {
 
   if (!isPdf) {
     alert("PDF 형식의 파일(.pdf)만 열 수 있습니다.\nHWP/HWPX 파일은 PDF로 변환 후 열어주세요.");
+    return;
+  }
+
+  if (window.MeetingFiles?.isAdmin()) {
+    window.MeetingFiles.share(file).catch(() => {});
     return;
   }
 
@@ -1877,7 +1896,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // 9. Hosted deployments can provide a default document.
   renderQuestionList();
   const defaultPdf = window.DASHBOARD_CONFIG?.defaultPdf;
-  if (defaultPdf?.url) {
+  if (defaultPdf?.url && !new URLSearchParams(window.location.search).has('room')) {
     loadHostedPdf(defaultPdf);
   } else {
     console.log("대시보드가 초기화 상태로 준비되었습니다. PDF 파일을 선택하거나 드롭해주세요.");
@@ -1885,6 +1904,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 async function loadHostedPdf(defaultPdf) {
+  const revision = ++documentLoadRevision;
   const overlay = document.getElementById('ai-loading-overlay');
   const title = document.getElementById('ai-loading-title');
   const desc = document.getElementById('ai-loading-desc');
@@ -1894,10 +1914,52 @@ async function loadHostedPdf(defaultPdf) {
   try {
     const response = await fetch(defaultPdf.url);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    await loadPdfBuffer(await response.arrayBuffer(), defaultPdf.name, true);
+    const buffer = await response.arrayBuffer();
+    if (revision !== documentLoadRevision) return false;
+    return await loadPdfBuffer(buffer, defaultPdf.name, true);
   } catch (error) {
     console.error('기본 PDF 로드 실패:', error);
     alert('기본 PDF를 불러오지 못했습니다. 새로고침하거나 PDF 파일을 직접 선택해주세요.');
+  } finally {
+    if (overlay) overlay.style.display = 'none';
+  }
+}
+
+async function loadSharedPdf(descriptor) {
+  if (!descriptor || !/^[a-f0-9]{64}$/.test(descriptor.id || '')) throw new Error('회의 자료 정보가 올바르지 않습니다.');
+  const url = new URL(descriptor.url, window.location.href);
+  const endpoint = new URL(window.DASHBOARD_CONFIG?.meetingDocumentEndpoint || '/.netlify/functions/meeting-document', window.location.href);
+  if (url.origin !== endpoint.origin || url.pathname !== endpoint.pathname) throw new Error('허용되지 않은 회의 자료 주소입니다.');
+  const revision = ++documentLoadRevision;
+  const previous = currentPdfBytes ? { bytes: currentPdfBytes.slice(0), name: currentPdfFileName,
+    document: { ...meetingDocument }, target: window.DashboardMeeting.getTarget() } : null;
+  const overlay = document.getElementById('ai-loading-overlay');
+  if (overlay) overlay.style.display = 'flex';
+  const title = document.getElementById('ai-loading-title');
+  const desc = document.getElementById('ai-loading-desc');
+  if (title) title.innerText = '회의 PDF를 불러오는 중...';
+  if (desc) desc.innerText = descriptor.name || '회의 자료';
+  let loadingStarted = false;
+  try {
+    const response = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(30000) });
+    if (!response.ok) throw new Error('회의 PDF를 다운로드하지 못했습니다. 다시 연결해주세요.');
+    const bytes = await response.arrayBuffer();
+    if (bytes.byteLength > 4500000) throw new Error('회의 PDF는 4.5MB 이하만 지원합니다.');
+    const hash = await window.crypto.subtle.digest('SHA-256', bytes);
+    const id = Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('');
+    if (id !== descriptor.id) throw new Error('회의 PDF 검증에 실패했습니다. 관리자가 자료를 다시 전송해주세요.');
+    if (revision !== documentLoadRevision) throw new Error('다른 자료를 불러오는 중입니다. 다시 시도해주세요.');
+    loadingStarted = true;
+    if (!await loadPdfBuffer(bytes, descriptor.name, true)) throw new Error('회의 PDF를 분석하지 못했습니다.');
+    meetingDocument.shared = descriptor;
+  } catch (error) {
+    if (loadingStarted && previous?.document.ready && revision === documentLoadRevision) {
+      await loadPdfBuffer(previous.bytes, previous.name, previous.document.hosted);
+      meetingDocument = previous.document;
+      if (previous.target.mode === 'question') await openQuestion(previous.target.questionId, true, false);
+      else await openTocView(true, false);
+    }
+    throw error;
   } finally {
     if (overlay) overlay.style.display = 'none';
   }

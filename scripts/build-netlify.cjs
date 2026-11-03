@@ -18,7 +18,7 @@ for (const asset of ['index.html', 'app.js', 'style.css', 'manifest.json', 'live
 }
 fs.copyFileSync(pdfSource, path.join(out, 'docs/audit-2026.pdf'));
 fs.writeFileSync(path.join(out, 'dashboard-config.js'), `window.DASHBOARD_CONFIG = ${JSON.stringify({
-  defaultPdf: { url: './docs/audit-2026.pdf', name: pdfName }, meetingEndpoint: '/.netlify/functions/meeting', meetingSdk: './vendor/ably.min.js'
+  defaultPdf: { url: './docs/audit-2026.pdf', name: pdfName }, meetingEndpoint: '/.netlify/functions/meeting', meetingDocumentEndpoint: '/.netlify/functions/meeting-document', meetingSdk: './vendor/ably.min.js'
 })};\n`);
 fs.writeFileSync(path.join(out, '_headers'), `/*
   X-Content-Type-Options: nosniff

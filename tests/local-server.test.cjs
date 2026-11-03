@@ -41,6 +41,18 @@ test('local launcher serves only the built dashboard and runs the real meeting h
   assert.equal(sent[0].state.questionId, 4);
   const snapshot = await (await fetch(endpoint)).json();
   assert.equal(snapshot.state.revision, sent[0].state.revision);
+  const bytes = Buffer.concat([Buffer.from('%PDF-1.7\n'), Buffer.alloc(17000, 65)]);
+  const uploadResponse = await fetch(base + '/.netlify/functions/meeting-document?room=local-room', {
+    method: 'POST', headers: { Authorization: `Bearer ${adminKey}`, 'X-Pdf-Name': encodeURIComponent('local-upload.pdf') }, body: bytes
+  });
+  assert.equal(uploadResponse.status, 201, 'local binary uploads are not limited to the old 8KB JSON body limit');
+  const { document } = await uploadResponse.json();
+  const downloaded = await fetch(base + document.url);
+  assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()), bytes);
+  const switchResponse = await fetch(endpoint, { method: 'POST', headers: { Authorization: `Bearer ${adminKey}` },
+    body: JSON.stringify({ ...move, documentId: document.id, fileId: document.fileId, action: 'set-document' }) });
+  assert.equal(switchResponse.status, 200);
+  assert.equal((await switchResponse.json()).state.document.fileId, document.fileId);
 });
 
 test('missing local keys are reported by name without exposing values', async t => {

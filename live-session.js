@@ -2,8 +2,8 @@
   'use strict';
 
   class MeetingSession {
-    constructor({ request, subscribe, getDocument, showTarget, onStatus = () => {} }) {
-      Object.assign(this, { request, subscribe, getDocument, showTarget, onStatus });
+    constructor({ request, subscribe, uploadFile, showDocument, getTarget, getDocument, showTarget, onStatus = () => {} }) {
+      Object.assign(this, { request, subscribe, uploadFile, showDocument, getTarget, getDocument, showTarget, onStatus });
       this.generation = 0;
       this.active = false;
       this.lastRevision = null;
@@ -18,7 +18,7 @@
       if (key) await this.request(room, { action: 'authenticate' }, key);
       if (generation !== this.generation) return;
       Object.assign(this, { active: true, room, key, role: key ? 'admin' : 'viewer', lastRevision: null,
-        lastState: null, pendingState: null, latestSequence: 0, browsing: false, connectionLost: false });
+        lastState: null, pendingState: null, sharedDocument: null, latestSequence: 0, browsing: false, connectionLost: false });
       this.onStatus(key ? 'admin' : 'waiting');
       if (key) return; // Presenters publish over HTTP; no subscription or heartbeat needed.
       try {
@@ -91,7 +91,7 @@
         if (!this.active || generation !== this.generation || !this.pendingState) return;
         const state = this.pendingState;
         if (!force && state.revision === this.lastRevision) return;
-        if (!this.getDocument().ready) { this.onStatus('loading'); return; }
+        if (!this.getDocument().ready && !state.document) { this.onStatus('loading'); return; }
         try {
           this.onStatus('switching');
           await this.showTarget(state);
@@ -115,10 +115,11 @@
         this.onStatus('browsing');
         return Promise.resolve();
       }
+      if (this.documentBusy) return Promise.resolve();
       const generation = this.generation;
       const doc = this.getDocument();
       if (!doc.ready || !doc.hosted || !doc.id) {
-        this.onStatus('error', '전체 전송은 배포된 공통 PDF에서 가능합니다. 기본 문서로 돌아가주세요.');
+        this.onStatus('error', '먼저 PDF를 회의 자료로 업로드해주세요.');
         return Promise.resolve();
       }
       // Serialize writes so a slow earlier request cannot overwrite a later move.
@@ -126,9 +127,12 @@
         if (generation !== this.generation) return;
         this.onStatus('sending');
         try {
-          const { state } = await this.request(this.room, { ...target, documentId: doc.id }, this.key);
+          const newDocument = doc.shared && this.sharedDocument?.fileId !== doc.shared.fileId;
+          const { state } = await this.request(this.room, { ...target, documentId: doc.id,
+            ...(newDocument ? { action: 'set-document', fileId: doc.shared.fileId } : {}) }, this.key);
           if (generation !== this.generation) return;
           this.lastRevision = state.revision;
+          if (doc.shared) this.sharedDocument = doc.shared;
           this.connectionLost = false;
           this.onStatus('admin');
         } catch (error) {
@@ -136,6 +140,34 @@
         }
       });
       return this.sendQueue;
+    }
+
+    async shareFile(file) {
+      if (!this.active || this.role !== 'admin') throw new Error('관리자로 회의에 연결해주세요.');
+      if (this.documentBusy) throw new Error('자료를 처리하는 중입니다. 완료 후 다시 선택해주세요.');
+      if (!file || !file.size || (!file.name?.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf')) throw new Error('회의에 사용할 PDF 파일을 선택해주세요.');
+      if (file.size > 4500000) throw new Error('PDF는 4.5MB 이하만 업로드할 수 있습니다.');
+      const generation = this.generation;
+      const room = this.room, key = this.key;
+      this.documentBusy = true;
+      this.onStatus('uploading');
+      try {
+        await this.sendQueue;
+        if (generation !== this.generation) return;
+        const { document } = await this.uploadFile(room, file, key);
+        if (generation !== this.generation) return;
+        await this.showDocument(document);
+        if (generation !== this.generation) return;
+        const { state } = await this.request(room, { ...this.getTarget(), action: 'set-document', fileId: document.fileId, documentId: document.id }, key);
+        if (generation !== this.generation) return;
+        this.lastRevision = state.revision;
+        this.sharedDocument = document;
+        this.onStatus('admin');
+        return state;
+      } catch (error) {
+        if (generation === this.generation) this.onStatus('error', error.message);
+        throw error;
+      } finally { this.documentBusy = false; }
     }
 
     async returnToAdmin() {
@@ -210,6 +242,7 @@
       offline: '개별 열람 · 회의에 연결하면 관리자 이동이 우선 표시됩니다',
       waiting: '회의 연결됨 · 관리자 전송 대기 중',
       loading: '회의 연결됨 · 문서를 불러오는 중',
+      uploading: '회의 PDF 업로드·확인 중 · 완료되면 참여자에게 적용됩니다',
       switching: '관리자 화면으로 이동 중…',
       following: '관리자 화면 표시 중 · 자유롭게 열람할 수 있습니다',
       browsing: '자유 열람 중 · 관리자 이동 시 자동 전환됩니다',
@@ -246,6 +279,18 @@
     };
     const session = new MeetingSession({
       request,
+      getTarget: () => root.DashboardMeeting.getTarget(),
+      showDocument: descriptor => root.DashboardMeeting.showDocument(descriptor),
+      uploadFile: async (room, file, key) => {
+        const url = new URL(root.DASHBOARD_CONFIG?.meetingDocumentEndpoint || '/.netlify/functions/meeting-document', location.href);
+        url.searchParams.set('room', room);
+        const response = await fetch(url, { method: 'POST', body: file, signal: AbortSignal.timeout(45000),
+          headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/pdf', 'X-Pdf-Name': encodeURIComponent(file.name) } });
+        let result;
+        try { result = await response.json(); } catch { throw new Error('업로드에 실패했습니다. PDF 크기와 서버 배포 상태를 확인해주세요.'); }
+        if (!response.ok) throw new Error(result.error || 'PDF 업로드에 실패했습니다.');
+        return result;
+      },
       subscribe: createAblySubscriber({ loadSdk, getToken: room => request(room, null, null, 'token') }),
       getDocument: () => root.DashboardMeeting.getDocument(),
       showTarget: state => root.DashboardMeeting.showTarget(state),
@@ -268,14 +313,18 @@
       url.searchParams.set('room', room);
       return url.href;
     };
-    const join = async (room, key) => {
+    const join = async (room, key, file) => {
+      if (key && !file) throw new Error('회의 PDF를 선택하거나 PDF를 먼저 열어주세요.');
       await session.join(room, key);
       if (!session.active) return;
+      if (key) {
+        try { await session.shareFile(file); }
+        catch (error) { session.leave(); throw error; }
+      }
       el('meeting-link').value = shareLink(room);
       const url = new URL(location.href);
       url.searchParams.set('room', room);
       history.replaceState(null, '', url);
-      if (key) await session.navigate(root.DashboardMeeting.getTarget());
     };
     el('meeting-open').onclick = () => {
       el('meeting-error').textContent = '';
@@ -293,7 +342,9 @@
       const buttons = form.querySelectorAll('button[type="submit"]');
       buttons.forEach(button => { button.disabled = true; });
       try {
-        await join(room, key);
+        const file = admin ? el('meeting-pdf').files?.[0] || root.DashboardMeeting.getFile() : null;
+        await join(room, key, file);
+        el('meeting-pdf').value = '';
         dialog.close();
       } catch (error) { el('meeting-error').textContent = error.message; }
       finally { buttons.forEach(button => { button.disabled = false; }); }
@@ -319,8 +370,18 @@
       // A newly opened local document must not suppress the next admin move.
       if (session.active && session.role === 'viewer') session.browsing = true;
       if (session.active && session.role === 'viewer') session.applyPending();
-      if (session.active && session.role === 'admin') session.navigate(root.DashboardMeeting.getTarget());
     });
+    root.MeetingFiles = {
+      isAdmin: () => session.active && session.role === 'admin',
+      async share(file) {
+        try { return await session.shareFile(file); }
+        catch (error) {
+          el('meeting-error').textContent = error.message;
+          if (!dialog.open) dialog.showModal();
+          throw error;
+        }
+      }
+    };
     // Ably handles transport reconnection; only a restored page needs a catch-up
     // read. No polling loop, heartbeat fetch, or visibility timer hits Netlify.
     root.addEventListener('pagehide', () => {
@@ -328,7 +389,7 @@
       session.stopSubscription = null;
     });
     root.addEventListener('pageshow', event => {
-      if (event.persisted && session.active) join(session.room, session.key).catch(error => session.onStatus('error', error.message));
+      if (event.persisted && session.active && session.role === 'viewer') join(session.room, '').catch(error => session.onStatus('error', error.message));
     });
     session.onStatus('offline');
     const room = new URL(location.href).searchParams.get('room');

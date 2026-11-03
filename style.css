@@ -23,6 +23,7 @@
 .btn-meeting[data-state="sending"]::after,
 .btn-meeting[data-state="switching"]::after,
 .btn-meeting[data-state="loading"]::after { background: #d97706; }
+.btn-meeting[data-state="uploading"]::after { background: #d97706; }
 .btn-meeting[data-state="error"]::after { background: #dc2626; }
 .btn-tool.btn-meeting[data-state="error"] { color: #b91c1c; border-color: #fca5a5; background: #fef2f2; }
 .meeting-dialog #meeting-status { color: #1e40af; line-height: 1.5; background: #eff6ff; padding: 10px 12px; border-radius: 8px; overflow-wrap: anywhere; }

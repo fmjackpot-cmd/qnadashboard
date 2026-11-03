@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { createHandler } from '../netlify/functions/meeting.mjs';
 import { createBroker } from '../netlify/lib/meeting-ably.mjs';
+import { createDocumentHandler, MAX_PDF_BYTES } from '../netlify/lib/meeting-documents.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const contentTypes = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -13,6 +14,12 @@ const contentTypes = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascr
 export function createLocalServer({ publishDirectory = path.join(root, 'netlify-deploy'),
   env = process.env, broker, namespace = `local-test-${randomUUID()}` } = {}) {
   const records = new Map();
+  const files = new Map();
+  const documents = {
+    set: async (id, data, { metadata }) => { files.set(id, { data, metadata }); },
+    getWithMetadata: async id => files.get(id) || null,
+    getMetadata: async id => files.has(id) ? { metadata: files.get(id).metadata } : null
+  };
   const missing = [];
   if (!env.ABLY_API_KEY || env.ABLY_API_KEY === 'your_ably_api_key_here') missing.push('ABLY_API_KEY');
   if (!env.MEETING_ADMIN_KEY || env.MEETING_ADMIN_KEY.length < 6 || env.MEETING_ADMIN_KEY.startsWith('replace_with_')) missing.push('MEETING_ADMIN_KEY');
@@ -20,7 +27,9 @@ export function createLocalServer({ publishDirectory = path.join(root, 'netlify-
     try { broker = createBroker({ apiKey: env.ABLY_API_KEY, namespace }); }
     catch { missing.push('ABLY_API_KEY'); }
   }
-  const handler = createHandler({ adminKey: missing.includes('MEETING_ADMIN_KEY') ? '' : env.MEETING_ADMIN_KEY,
+  const adminKey = missing.includes('MEETING_ADMIN_KEY') ? '' : env.MEETING_ADMIN_KEY;
+  const documentHandler = createDocumentHandler({ documents, adminKey });
+  const handler = createHandler({ documents, adminKey,
     broker: missing.includes('ABLY_API_KEY') ? null : broker,
     store: { get: async room => records.get(room) || null, setJSON: async (room, state) => { records.set(room, state); } } });
   const publicRoot = path.resolve(publishDirectory);
@@ -34,15 +43,16 @@ export function createLocalServer({ publishDirectory = path.join(root, 'netlify-
         response.end(JSON.stringify({ ok: true, realtimeConfigured: missing.length === 0, missing }));
         return;
       }
-      if (url.pathname === '/.netlify/functions/meeting') {
+      if (['/.netlify/functions/meeting', '/.netlify/functions/meeting-document'].includes(url.pathname)) {
+        const isDocument = url.pathname === '/.netlify/functions/meeting-document';
         const chunks = [];
         let length = 0;
         for await (const chunk of request) {
           length += chunk.length;
-          if (length > 8192) { response.writeHead(413); response.end('Request too large'); return; }
+          if (length > (isDocument ? MAX_PDF_BYTES : 8192)) { response.writeHead(413, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ error: '파일 또는 요청이 너무 큽니다.' })); return; }
           chunks.push(chunk);
         }
-        const result = await handler(new Request(url, { method: request.method, headers: request.headers,
+        const result = await (isDocument ? documentHandler : handler)(new Request(url, { method: request.method, headers: request.headers,
           body: ['GET', 'HEAD'].includes(request.method) ? undefined : Buffer.concat(chunks) }));
         response.statusCode = result.status;
         result.headers.forEach((value, name) => response.setHeader(name, value));
