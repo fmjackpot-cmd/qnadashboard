@@ -1,0 +1,12 @@
+{
+  "name": "question-dashboard",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build-netlify.cjs",
+    "test": "node --test tests/*.test.cjs"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^10.0.0"
+  },
+  "engines": { "node": ">=22" }
+}

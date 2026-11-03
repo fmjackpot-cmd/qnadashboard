@@ -14,6 +14,33 @@
   --cat-gap: calc(var(--btn-h) * 0.3); /* 정확히 0.3 버튼 높이 간격 */
 }
 
+/* Meeting controls stay visible while viewers browse the document freely. */
+.meeting-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; background: #eff6ff; border-bottom: 1px solid #bfdbfe; flex-shrink: 0; font-size: 12px; }
+#meeting-status { color: #1e40af; line-height: 1.5; }
+#meeting-status[data-state="error"] { color: #b91c1c; }
+.meeting-actions, .meeting-share { display: flex; gap: 6px; flex-shrink: 0; }
+.meeting-bar button, .meeting-dialog button { border: 1px solid #cbd5e1; border-radius: 7px; padding: 7px 10px; background: white; color: #1e293b; cursor: pointer; font-size: 12px; }
+.meeting-bar button:hover, .meeting-dialog button:hover { background: #dbeafe; }
+.meeting-bar [hidden], .meeting-dialog [hidden] { display: none; }
+.meeting-dialog { margin: auto; width: min(480px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow-y: auto; border: 1px solid #cbd5e1; border-radius: 16px; padding: 24px; color: #1e293b; box-shadow: 0 20px 70px #0f172a55; }
+.meeting-dialog::backdrop { background: #0f172a88; }
+.meeting-dialog-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.meeting-dialog h2 { font-size: 19px; }
+.meeting-dialog p { font-size: 13px; line-height: 1.7; margin: 14px 0; }
+.meeting-dialog label { display: block; font-size: 13px; font-weight: 600; margin: 16px 0 6px; }
+.meeting-dialog small { font-weight: normal; color: #64748b; }
+.meeting-dialog input { display: block; width: 100%; min-width: 0; padding: 10px; border: 1px solid #cbd5e1; border-radius: 7px; font-size: 14px; }
+.meeting-dialog form button { width: 100%; margin-top: 8px; padding: 10px; }
+.meeting-dialog #meeting-admin { background: #1e40af; color: white; }
+.meeting-dialog button:disabled { opacity: 0.5; cursor: wait; }
+.meeting-dialog #meeting-error { color: #b91c1c; min-height: 20px; }
+.meeting-dialog button:focus-visible, .meeting-bar button:focus-visible { outline: 3px solid #38bdf8; outline-offset: 2px; }
+@media (max-width: 600px) {
+  .meeting-bar { align-items: flex-start; flex-direction: column; padding: 6px 10px; }
+  .meeting-actions { width: 100%; flex-wrap: wrap; }
+  .meeting-dialog { padding: 18px; }
+}
+
 * {
   box-sizing: border-box;
   margin: 0;

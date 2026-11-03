@@ -17,6 +17,33 @@ let currentListOrder = 'category'; // 'category' | 'number'
 let geminiApiKey = "";
 let tocPages = []; // Detected TOC pages
 let windowDragCounter = 0;
+let viewRenderRevision = 0;
+let meetingDocument = { ready: false, hosted: false, id: null };
+
+function announceNavigation(mode, questionId = null) {
+  window.dispatchEvent(new CustomEvent('dashboard-navigation', { detail: { mode, questionId } }));
+}
+
+window.DashboardMeeting = {
+  getDocument: () => ({ ...meetingDocument }),
+  getTarget: () => ({ mode: currentViewMode, questionId: currentViewMode === 'question' ? Number(selectedQuestionId) : null }),
+  async showTarget(state) {
+    if (!meetingDocument.hosted) {
+      const pdf = window.DASHBOARD_CONFIG?.defaultPdf;
+      if (!pdf?.url) throw new Error('관리자와 같은 공통 PDF가 필요합니다. 배포된 주소에서 접속해주세요.');
+      await loadHostedPdf(pdf);
+    }
+    if (!meetingDocument.ready || meetingDocument.id !== state.documentId) {
+      throw new Error('관리자와 PDF 버전이 다릅니다. 같은 배포 주소인지 확인하고 새로고침해주세요.');
+    }
+    if (state.mode === 'toc') await openTocView(true, false);
+    else {
+      if (!currentItems.some(item => Number(item.id) === state.questionId)) throw new Error('관리자가 선택한 문항을 찾지 못했습니다.');
+      await openQuestion(state.questionId, true, false);
+    }
+    closeMobileSidebar();
+  }
+};
 
 // PDF Page Margin Cropping (Independently tuned per user feedback)
 const CROP_LEFT = 0.038;   // 왼쪽: 3.8% (글자 잘림 방지)
@@ -1299,6 +1326,7 @@ async function renderQuestionAnswerPage(pageNum, q, container) {
 async function renderCurrentView(autoFit = true) {
   const viewportContainer = document.getElementById('pdf-viewport');
   if (!viewportContainer || !currentPdfDoc || !currentQuestion) return;
+  const revision = ++viewRenderRevision;
 
   currentViewMode = 'question';
   const q = currentQuestion;
@@ -1312,7 +1340,9 @@ async function renderCurrentView(autoFit = true) {
   renderQuestionList();
 
   if (autoFit) {
-    currentScale = await calcFitScale(q.startPdfPage);
+    const scale = await calcFitScale(q.startPdfPage);
+    if (revision !== viewRenderRevision) return;
+    currentScale = scale;
   }
   const zoomLevelEl = document.getElementById('zoom-level');
   if (zoomLevelEl) zoomLevelEl.innerText = Math.round(currentScale * 100) + '%';
@@ -1355,6 +1385,7 @@ async function renderCurrentView(autoFit = true) {
   viewportContainer.scrollTop = 0;
 
   for (let p = q.startPdfPage; p <= q.endPdfPage; p++) {
+    if (revision !== viewRenderRevision) return;
     await renderQuestionAnswerPage(p, q, viewportContainer);
   }
 }
@@ -1406,7 +1437,7 @@ async function renderTocPage(pageNum, currentIdx, totalPages, container) {
   await page.render({ canvasContext: ctx, viewport: viewport }).promise;
 }
 
-async function openTocView(autoFit = true) {
+async function openTocView(autoFit = true, broadcast = true) {
   if (!currentPdfDoc) {
     alert("먼저 PDF 문서를 열어주세요.");
     return;
@@ -1414,12 +1445,14 @@ async function openTocView(autoFit = true) {
 
   if (!tocPages || tocPages.length === 0) {
     alert("이 문서에는 별도의 목차 페이지가 감지되지 않았습니다.\n첫 번째 문항으로 이동합니다.");
-    if (currentItems.length > 0) openQuestion(currentItems[0].id, true);
+    if (currentItems.length > 0) await openQuestion(currentItems[0].id, true, broadcast);
     return;
   }
 
   currentViewMode = 'toc';
   selectedQuestionId = null;
+  const revision = ++viewRenderRevision;
+  if (broadcast && autoFit) announceNavigation('toc');
 
   // Activate TOC button
   const btnToc = document.getElementById('btn-show-toc');
@@ -1445,7 +1478,9 @@ async function openTocView(autoFit = true) {
   // Calculate Fit Scale using first TOC page
   const firstTocPage = tocPages[0] || 1;
   if (autoFit) {
-    currentScale = await calcFitScale(firstTocPage);
+    const scale = await calcFitScale(firstTocPage);
+    if (revision !== viewRenderRevision) return;
+    currentScale = scale;
   }
   const zoomLevelEl = document.getElementById('zoom-level');
   if (zoomLevelEl) zoomLevelEl.innerText = Math.round(currentScale * 100) + '%';
@@ -1457,17 +1492,19 @@ async function openTocView(autoFit = true) {
 
   // Render all TOC pages continuously
   for (let i = 0; i < tocPages.length; i++) {
+    if (revision !== viewRenderRevision) return;
     const pageNum = tocPages[i];
     await renderTocPage(pageNum, i + 1, tocPages.length, viewportContainer);
   }
 }
 
-async function openQuestion(questionId, autoFit = true) {
+async function openQuestion(questionId, autoFit = true, broadcast = true) {
   const targetId = Number(questionId);
   const q = currentItems.find(i => Number(i.id) === targetId);
   if (!q) return;
 
   currentQuestion = q;
+  if (broadcast) announceNavigation('question', targetId);
   await renderCurrentView(autoFit);
 }
 
@@ -1484,13 +1521,15 @@ function applyZoom(newScale) {
 // 7. PDF FILE LOADING & DYNAMIC REFRESH PIPELINE
 // ==========================================================================
 
-async function loadPdfBuffer(buffer, fileName) {
+async function loadPdfBuffer(buffer, fileName, hosted = false) {
   if (!buffer || buffer.byteLength === 0) {
     alert("선택한 파일이 비어있습니다.");
     return;
   }
 
   currentPdfBytes = buffer.slice(0);
+  ++viewRenderRevision;
+  meetingDocument = { ready: false, hosted, id: null };
   currentPdfFileName = fileName || "결산예상질의_답변서.pdf";
 
   // Reset items to ensure fresh parse for uploaded file
@@ -1499,6 +1538,10 @@ async function loadPdfBuffer(buffer, fileName) {
   currentQuestion = null;
 
   try {
+    if (window.crypto?.subtle) {
+      const hash = await window.crypto.subtle.digest('SHA-256', currentPdfBytes);
+      meetingDocument.id = Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('');
+    }
     const uint8 = new Uint8Array(buffer);
     const loadingTask = pdfjsLib.getDocument({ data: uint8 });
     currentPdfDoc = await loadingTask.promise;
@@ -1517,11 +1560,13 @@ async function loadPdfBuffer(buffer, fileName) {
       currentQuestion = currentItems[0];
       selectedQuestionId = currentItems[0].id;
       renderQuestionList();
-      await openQuestion(currentItems[0].id, true);
+      await openQuestion(currentItems[0].id, true, false);
     } else {
       renderQuestionList();
-      await openTocView(true);
+      await openTocView(true, false);
     }
+    meetingDocument.ready = true;
+    window.dispatchEvent(new CustomEvent('dashboard-document-ready'));
   } catch (err) {
     console.error("Error loading PDF:", err);
     alert("PDF 파일을 불러오는 중 오류가 발생했습니다: " + (err && err.message ? err.message : err));
@@ -1666,7 +1711,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
         if (currentViewMode === 'toc') {
-          openTocView(true);
+          openTocView(true, false);
         } else {
           renderCurrentView(true);
         }
@@ -1688,7 +1733,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (btnZoomFit) {
     btnZoomFit.onclick = () => {
       if (currentViewMode === 'toc') {
-        openTocView(true);
+        openTocView(true, false);
       } else {
         renderCurrentView(true);
       }
@@ -1819,7 +1864,7 @@ document.addEventListener('DOMContentLoaded', () => {
     clearTimeout(windowResizeTimer);
     windowResizeTimer = setTimeout(() => {
       if (currentViewMode === 'toc') {
-        openTocView(true);
+        openTocView(true, false);
       } else {
         renderCurrentView(true);
       }
@@ -1849,7 +1894,7 @@ async function loadHostedPdf(defaultPdf) {
   try {
     const response = await fetch(defaultPdf.url);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    await loadPdfBuffer(await response.arrayBuffer(), defaultPdf.name);
+    await loadPdfBuffer(await response.arrayBuffer(), defaultPdf.name, true);
   } catch (error) {
     console.error('기본 PDF 로드 실패:', error);
     alert('기본 PDF를 불러오지 못했습니다. 새로고침하거나 PDF 파일을 직접 선택해주세요.');

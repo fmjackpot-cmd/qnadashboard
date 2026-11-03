@@ -16,4 +16,6 @@ desktop.ini
 # Generated Netlify deployment package
 netlify-deploy/
 netlify-deploy.zip
+node_modules/
+.netlify/
 

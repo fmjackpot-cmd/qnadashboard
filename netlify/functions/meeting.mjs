@@ -1,0 +1,58 @@
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+
+const json = (data, status = 200) => new Response(JSON.stringify(data), {
+  status,
+  headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }
+});
+const digest = value => createHash('sha256').update(value).digest();
+const roomPattern = /^[a-zA-Z0-9_-]{1,64}$/;
+const maxAge = 12 * 60 * 60 * 1000;
+
+// Dependencies are injectable so authorization and persistence can be checked locally.
+export function createHandler({ store, adminKey, now = Date.now, revision = randomUUID }) {
+  return async request => {
+    if (!['GET', 'POST'].includes(request.method)) return json({ error: '허용되지 않은 요청입니다.' }, 405);
+    if (!adminKey || adminKey.length < 24) return json({ error: '서버에 MEETING_ADMIN_KEY(24자 이상)를 설정하고 다시 배포해주세요.' }, 503);
+    const url = new URL(request.url);
+    const room = url.searchParams.get('room') || '';
+    if (!roomPattern.test(room)) return json({ error: '회의 코드는 영문·숫자·밑줄·하이픈 1~64자로 입력해주세요.' }, 400);
+    try {
+      if (request.method === 'GET') {
+        const state = await store.get(room, { type: 'json', consistency: 'strong' });
+        return json({ state: state && now() - state.updatedAt < maxAge ? state : null });
+      }
+      const token = request.headers.get('authorization') || '';
+      if (!timingSafeEqual(digest(token), digest(`Bearer ${adminKey}`))) return json({ error: '관리자 인증키를 확인해주세요.' }, 401);
+      // No cross-origin writes, including browser requests made with stolen room links.
+      const origin = request.headers.get('origin');
+      if (origin && origin !== url.origin) return json({ error: '다른 사이트에서 제어할 수 없습니다.' }, 403);
+      const bodyText = await request.text();
+      if (bodyText.length > 2048) return json({ error: '요청이 너무 큽니다.' }, 413);
+      let body;
+      try { body = JSON.parse(bodyText); } catch { return json({ error: '올바른 JSON 요청이 아닙니다.' }, 400); }
+      if (body?.action === 'authenticate') return json({ authenticated: true });
+      if (!body || !/^[a-f0-9]{64}$/.test(body.documentId || '') ||
+          !['question', 'toc'].includes(body.mode) ||
+          (body.mode === 'question' && (!Number.isSafeInteger(body.questionId) || body.questionId < 1))) {
+        return json({ error: '문서 또는 문항 정보가 올바르지 않습니다.' }, 400);
+      }
+      const state = { revision: revision(), updatedAt: now(), documentId: body.documentId,
+        mode: body.mode, questionId: body.mode === 'question' ? body.questionId : null };
+      await store.setJSON(room, state);
+      return json({ state });
+    } catch (error) {
+      console.error('Meeting state unavailable:', error.name);
+      return json({ error: '회의 서버에 연결하지 못했습니다. 잠시 후 다시 시도해주세요.' }, 503);
+    }
+  };
+}
+
+export default async request => {
+  try {
+    const { getStore } = await import('@netlify/blobs');
+    const store = getStore({ name: `dashboard-meetings-${process.env.CONTEXT || 'production'}`, consistency: 'strong' });
+    return await createHandler({ store, adminKey: process.env.MEETING_ADMIN_KEY })(request);
+  } catch {
+    return json({ error: 'Netlify 회의 저장소를 사용할 수 없습니다. 서버 설정을 확인해주세요.' }, 503);
+  }
+};
