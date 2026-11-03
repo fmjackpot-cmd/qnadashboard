@@ -11,11 +11,20 @@ async function setup() {
   const records = new Map();
   let clock = 1000;
   let version = 0;
+  const subscriptions = new Map();
+  const publications = [];
+  const broker = {
+    issueToken: async room => ({ channel: `test:${room}`, tokenRequest: { capability: JSON.stringify({ [`test:${room}`]: ['subscribe'] }) } }),
+    publish: async (room, state) => {
+      publications.push({ room, state });
+      for (const listener of subscriptions.get(room) || []) listener.onState(state);
+    }
+  };
   const store = {
     get: async room => records.get(room) || null,
     setJSON: async (room, state) => records.set(room, state)
   };
-  const handler = createHandler({ store, adminKey: key, now: () => clock, revision: () => `event-${++version}` });
+  const handler = createHandler({ store, broker, adminKey: key, now: () => clock, revision: () => `event-${++version}` });
   const request = async (room, body, token) => {
     const response = await handler(new Request(`https://meeting.example/.netlify/functions/meeting?room=${encodeURIComponent(room)}`, {
       method: body ? 'POST' : 'GET',
@@ -29,12 +38,17 @@ async function setup() {
   const makeClient = (custom = {}) => {
     const shown = [], statuses = [];
     const client = new MeetingSession({ request,
+      subscribe: async (room, callbacks) => {
+        if (!subscriptions.has(room)) subscriptions.set(room, new Set());
+        subscriptions.get(room).add(callbacks);
+        return () => subscriptions.get(room).delete(callbacks);
+      },
       getDocument: () => ({ ready: true, hosted: true, id: documentId }),
       showTarget: async state => shown.push(state.questionId ?? 'toc'),
       onStatus: (status, message) => statuses.push({ status, message }), ...custom });
     return { client, shown, statuses };
   };
-  return { createHandler, handler, request, records, store, makeClient, advance: ms => { clock += ms; } };
+  return { createHandler, handler, request, records, store, broker, publications, subscriptions, makeClient, advance: ms => { clock += ms; } };
 }
 
 test('two viewers browse independently until the next admin move; same-question resend also takes priority', async () => {
@@ -44,21 +58,21 @@ test('two viewers browse independently until the next admin move; same-question 
   await one.client.join('room');
   await two.client.join('room');
   await admin.client.navigate(target(3));
-  await Promise.all([one.client.poll(), two.client.poll()]);
+  await Promise.all([one.client.applyQueue, two.client.applyQueue]);
   assert.deepEqual(one.shown, [3]);
   assert.deepEqual(two.shown, [3]);
   await one.client.navigate(target(9));
-  await one.client.poll();
-  await two.client.poll();
+  await one.client.applyQueue;
+  await two.client.applyQueue;
   assert.deepEqual(one.shown, [3], 'unchanged admin state must not repeatedly reset independent reading');
   assert.equal(one.client.browsing, true);
   assert.equal(two.client.browsing, false);
   await admin.client.navigate(target(3));
-  await Promise.all([one.client.poll(), two.client.poll()]);
+  await Promise.all([one.client.applyQueue, two.client.applyQueue]);
   assert.deepEqual(one.shown, [3, 3]);
   assert.equal(one.client.browsing, false);
   await admin.client.navigate({ mode: 'toc' });
-  await one.client.poll();
+  await one.client.applyQueue;
   assert.deepEqual(one.shown, [3, 3, 'toc']);
 });
 
@@ -72,20 +86,20 @@ test('late join, reconnect, and explicit return show the latest admin event', as
   await admin.client.join('meeting', key);
   await admin.client.navigate(target(7));
   await viewer.client.join('meeting');
-  await viewer.client.poll();
+  await viewer.client.sync();
   await viewer.client.navigate(target(2));
   unavailable = true;
-  await viewer.client.poll();
+  await viewer.client.sync();
   assert.equal(viewer.statuses.at(-1).status, 'error');
   unavailable = false;
-  await viewer.client.poll();
+  await viewer.client.sync();
   assert.equal(viewer.statuses.at(-1).status, 'browsing');
   assert.deepEqual(viewer.shown, [7]);
   unavailable = true;
   await admin.client.navigate(target(8));
-  await viewer.client.poll();
+  await viewer.client.sync();
   unavailable = false;
-  await viewer.client.poll();
+  await viewer.client.sync();
   await viewer.client.navigate(target(2));
   await viewer.client.returnToAdmin();
   assert.deepEqual(viewer.shown, [7, 8, 8]);
@@ -101,14 +115,14 @@ test('loading and document errors retry without marking an admin move as consume
   await admin.client.join('room', key);
   await viewer.client.join('room');
   await admin.client.navigate(target(2));
-  await viewer.client.poll();
+  await viewer.client.applyQueue;
   assert.equal(viewer.statuses.at(-1).status, 'loading');
   ready = true;
-  await viewer.client.poll();
+  await viewer.client.applyPending();
   assert.equal(viewer.client.lastRevision, null);
   assert.equal(viewer.statuses.at(-1).status, 'error');
   mismatched = false;
-  await viewer.client.poll();
+  await viewer.client.applyPending();
   assert.equal(viewer.client.lastRevision, 'event-1');
 });
 
@@ -135,17 +149,17 @@ test('leave ignores in-flight state; rooms are isolated and old return targets a
   await request('one', target(4), key);
   const viewer = makeClient();
   await viewer.client.join('one');
-  await viewer.client.poll();
+  await viewer.client.sync();
   await viewer.client.join('two');
   await viewer.client.returnToAdmin();
-  await viewer.client.poll();
+  await viewer.client.sync();
   assert.deepEqual(viewer.shown, [4]);
   let resolveRead;
   viewer.client.request = () => new Promise(resolve => { resolveRead = resolve; });
-  const polling = viewer.client.poll();
+  const syncing = viewer.client.sync();
   viewer.client.leave();
   resolveRead({ state: { revision: 'late', ...target(9) } });
-  await polling;
+  await syncing;
   assert.deepEqual(viewer.shown, [4]);
   assert.equal(viewer.client.key, '');
 });
@@ -193,7 +207,7 @@ test('state reads use strong consistency, do not cache, and expire after 12 hour
   assert.equal((await request('room')).state, null);
   let options;
   const { createHandler } = await import('../netlify/functions/meeting.mjs');
-  const handler2 = createHandler({ adminKey: key, store: { get: async (_, opts) => { options = opts; return null; } } });
+  const handler2 = createHandler({ adminKey: key, broker: {}, store: { get: async (_, opts) => { options = opts; return null; } } });
   await handler2(new Request('https://meeting.example/?room=room'));
   assert.equal(options.consistency, 'strong');
 });

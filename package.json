@@ -6,7 +6,10 @@
     "test": "node --test tests/*.test.cjs"
   },
   "dependencies": {
-    "@netlify/blobs": "^10.0.0"
+    "@netlify/blobs": "^10.0.0",
+    "ably": "^2.30.0"
   },
-  "engines": { "node": ">=22" }
+  "engines": {
+    "node": ">=22"
+  }
 }

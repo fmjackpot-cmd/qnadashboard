@@ -9,15 +9,17 @@ const roomPattern = /^[a-zA-Z0-9_-]{1,64}$/;
 const maxAge = 12 * 60 * 60 * 1000;
 
 // Dependencies are injectable so authorization and persistence can be checked locally.
-export function createHandler({ store, adminKey, now = Date.now, revision = randomUUID }) {
+export function createHandler({ store, adminKey, broker, now = Date.now, revision = randomUUID }) {
   return async request => {
     if (!['GET', 'POST'].includes(request.method)) return json({ error: '허용되지 않은 요청입니다.' }, 405);
     if (!adminKey || adminKey.length < 24) return json({ error: '서버에 MEETING_ADMIN_KEY(24자 이상)를 설정하고 다시 배포해주세요.' }, 503);
+    if (!broker) return json({ error: '서버에 ABLY_API_KEY를 설정하고 다시 배포해주세요.' }, 503);
     const url = new URL(request.url);
     const room = url.searchParams.get('room') || '';
     if (!roomPattern.test(room)) return json({ error: '회의 코드는 영문·숫자·밑줄·하이픈 1~64자로 입력해주세요.' }, 400);
     try {
       if (request.method === 'GET') {
+        if (url.searchParams.get('action') === 'token') return json(await broker.issueToken(room));
         const state = await store.get(room, { type: 'json', consistency: 'strong' });
         return json({ state: state && now() - state.updatedAt < maxAge ? state : null });
       }
@@ -36,9 +38,11 @@ export function createHandler({ store, adminKey, now = Date.now, revision = rand
           (body.mode === 'question' && (!Number.isSafeInteger(body.questionId) || body.questionId < 1))) {
         return json({ error: '문서 또는 문항 정보가 올바르지 않습니다.' }, 400);
       }
-      const state = { revision: revision(), updatedAt: now(), documentId: body.documentId,
+      const previous = await store.get(room, { type: 'json', consistency: 'strong' });
+      const state = { revision: revision(), sequence: (previous?.sequence || 0) + 1, updatedAt: now(), documentId: body.documentId,
         mode: body.mode, questionId: body.mode === 'question' ? body.questionId : null };
       await store.setJSON(room, state);
+      await broker.publish(room, state);
       return json({ state });
     } catch (error) {
       console.error('Meeting state unavailable:', error.name);
@@ -50,8 +54,12 @@ export function createHandler({ store, adminKey, now = Date.now, revision = rand
 export default async request => {
   try {
     const { getStore } = await import('@netlify/blobs');
-    const store = getStore({ name: `dashboard-meetings-${process.env.CONTEXT || 'production'}`, consistency: 'strong' });
-    return await createHandler({ store, adminKey: process.env.MEETING_ADMIN_KEY })(request);
+    const { createBroker } = await import('../lib/meeting-ably.mjs');
+    // Use a deployment ID outside production so previews never control a live meeting.
+    const namespace = process.env.CONTEXT === 'production' ? 'production' : (process.env.DEPLOY_ID || 'local');
+    const store = getStore({ name: `dashboard-meetings-${namespace}`, consistency: 'strong' });
+    const broker = process.env.ABLY_API_KEY ? createBroker({ apiKey: process.env.ABLY_API_KEY, namespace }) : null;
+    return await createHandler({ store, adminKey: process.env.MEETING_ADMIN_KEY, broker })(request);
   } catch {
     return json({ error: 'Netlify 회의 저장소를 사용할 수 없습니다. 서버 설정을 확인해주세요.' }, 503);
   }

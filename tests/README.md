@@ -2,7 +2,8 @@
 
 - 전체 회귀 검증: `node --test tests/*.test.cjs`
 - 관리자 우선 회의 검증: `node --test tests/meeting.test.cjs`
-- 회의 테스트는 서버 핸들러와 복수 이용자 세션을 함께 실행해 자유 탐색, 관리자 우선 전환, 동일 문항 재전송, 재연결, 회의 격리 및 관리자 인증을 검사합니다. 저장소는 메모리 대역을 사용하므로 실제 Netlify Blobs 연결은 배포 후 확인해야 합니다.
+- Ably 실시간 전송 검증: `node --test tests/ably.test.cjs`
+- 회의 테스트는 서버 핸들러와 복수 이용자 세션을 함께 실행해 자유 탐색, 관리자 우선 전환, 동일 문항 재전송, 재연결, 회의 격리 및 관리자 인증을 검사합니다. Ably 테스트는 반복 HTTP 요청 없음, 수신 전용 토큰, SDK 연결 종료·갱신·복구, 오래된 스냅샷 방지 및 문서 로딩 중 최신 이벤트 적용을 검사합니다. 실제 Ably 연결과 Netlify Blobs는 키 설정·배포 후 두 기기로 확인해야 합니다.
 
 - 단위·회귀 테스트: `node --test tests/parser.test.cjs`
 - 실제 PDF 통합 테스트: `node tests/pdf-integration.cjs <pdf.js-3.11.174의-pdf.cjs-절대경로> <pdf.worker.cjs-절대경로>`

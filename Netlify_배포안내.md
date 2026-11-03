@@ -5,12 +5,22 @@
 - 이용자는 브라우저에서 문항을 자유롭게 열람합니다.
 - 관리자가 문항/목차를 선택하거나 **현재 화면 전송**을 누르면, 같은 회의의 이용자 화면이 해당 문항/목차로 전환됩니다. 같은 문항을 다시 전송할 수도 있습니다.
 - 전환 뒤에도 이용자는 자유롭게 탐색할 수 있습니다. 확대·스크롤·목록 정렬은 다른 기기에 전송하지 않습니다.
-- 약 1.5초 간격으로 최신 이동 정보를 확인합니다. 네트워크·문서 렌더링 시간에 따라 반영이 늦을 수 있습니다. 연결 실패 시 4초 간격으로 다시 시도하고, 재연결/재접속 시 최신 관리자 이동을 적용합니다.
+- 관리자 이동을 Ably 실시간 연결로 수신합니다. 이용자가 가만히 열람하는 동안 Netlify에 주기적으로 확인 요청을 보내지 않습니다. 최신 문항 조회는 처음 연결하거나 실시간 연결을 복구할 때만 실행합니다. 문서 로딩 중에는 가장 최근 관리자 이동을 보관했다가 적용합니다.
+- 관리자는 Netlify에 인증하고 이동할 때만 요청을 보냅니다. 이용자는 Ably 연결을 유지하며, 수신 토큰은 필요할 때 갱신합니다(현재 유효기간 1시간). Ably 연결 유지·재연결 통신은 남으며, 사용량이 완전히 0이 되는 것은 아닙니다.
 - 관리자 접속을 종료해도 최신 이동은 12시간 동안 남습니다. 회의별로 다른 코드를 사용해주세요. 한 회의는 관리자 한 명이 진행하는 방식이며, 여러 관리자가 접속하면 마지막으로 저장된 이동이 우선합니다.
 
 ## Functions를 포함한 배포
 
-실시간 회의는 **Netlify Functions와 Netlify Blobs**를 사용합니다. 정적 폴더/ZIP을 Netlify Drop에 올리기만 하면 회의 서버가 배포되지 않습니다.
+실시간 회의는 **Netlify Functions + Netlify Blobs + Ably Pub/Sub**를 사용합니다. Netlify는 화면·PDF·관리자 인증·최신 상태 저장을 담당하고, Ably는 문항 이동 이벤트만 전달합니다. PDF 본문이나 파일 자체를 Ably로 전송하지 않습니다. 정적 폴더/ZIP을 Netlify Drop에 올리기만 하면 회의 서버가 배포되지 않습니다.
+
+### Ably 가입 후 설정
+
+1. Ably 대시보드에서 **Pub/Sub 앱**을 하나 만듭니다. 앱의 **API Keys**에서 서버용 키를 만들거나 기존 키를 선택합니다.
+2. 해당 키에는 이 앱의 `dashboard:*` 채널에 대한 **Publish**와 **Subscribe** 권한이 필요합니다. SDK에서 생성하는 이용자 토큰은 해당 회의 채널의 **Subscribe만** 허용하며, 이용자에게 Publish 권한을 주지 않습니다. Presence/History 기능은 사용하지 않습니다.
+3. 전체 API Key 값(`키이름:비밀값`)을 Netlify의 **환경 변수 `ABLY_API_KEY`**에 등록하고 Functions에서 사용할 수 있도록 설정합니다. 브라우저 코드·`dashboard-config.js`·공유 URL·Git에는 넣지 마세요. `.env.example`에는 이름과 설명만 있습니다.
+4. 아래의 `MEETING_ADMIN_KEY`도 별도로 설정하고 다시 배포합니다. Ably 키와 관리자 인증키는 서로 다른 값입니다. 이용자는 Ably 계정이나 키를 입력할 필요가 없습니다.
+
+Ably 비밀키는 서버에만 보관합니다. 이용자에게는 한 회의 채널의 수신 권한만 담긴 1시간짜리 서명 토큰 요청을 내려주며, 갱신은 Ably SDK가 처리합니다. Ably 앱의 Pub/Sub 연결과 Netlify Functions 접근이 허용된 네트워크에서 사용하세요.
 
 1. Netlify 사이트의 환경 변수에 **`MEETING_ADMIN_KEY`**를 등록합니다. Functions에서 사용할 수 있도록 설정하고, 예측하기 어려운 24자 이상의 임의 문자열을 사용하세요. 저장소·배포 폴더·이용자 접속 주소에 키를 넣지 마세요.
 2. 프로젝트 루트의 `netlify.toml`을 사용하는 빌드 배포를 실행합니다. Git 연동 시 build command는 `node scripts/build-netlify.cjs`, publish directory는 `netlify-deploy`, functions directory는 `netlify/functions`입니다. **GitHub 푸시는 사용자가 요청할 때만 합니다.**
@@ -20,6 +30,18 @@
 의존성은 `pnpm install --frozen-lockfile`로 설치할 수 있습니다. Node.js 22 이상을 사용합니다. Netlify 빌드는 pnpm lockfile을 사용해 의존성을 설치합니다.
 
 참고: [Functions 설정](https://docs.netlify.com/build/functions/configuration/), [Blobs 저장소 및 strong consistency](https://docs.netlify.com/build/data-and-storage/netlify-blobs/), [Functions 환경 변수](https://docs.netlify.com/build/functions/environment-variables/).
+
+Ably 참고: [JavaScript SDK](https://ably.com/docs/getting-started/javascript), [토큰 및 권한](https://ably.com/docs/api/token-request-spec).
+
+### 연결 확인
+
+- 관리자와 이용자를 서로 다른 브라우저/기기에서 같은 회의에 연결합니다.
+- 관리자가 3번 문항 선택 → 이용자가 3번 표시 → 이용자가 9번 자유 열람 → 관리자가 4번 선택 → 이용자가 4번으로 우선 전환되는지 확인합니다.
+- 관리자가 **현재 화면 전송**을 누르면 같은 문항도 다시 적용되어야 합니다.
+- 이용자가 새로 접속하거나 연결을 복구하면 최신 관리자 문항이 표시되어야 합니다.
+- 이용자 개발자 도구 Network에서 Netlify `meeting` 요청이 1.5초마다 반복되지 않아야 합니다. Ably WebSocket과 연결 유지 통신은 정상입니다.
+- `ABLY_API_KEY`가 없거나 잘못된 경우 연결 오류를 표시합니다. 주기적인 확인 방식으로 자동 전환하지 않습니다. Ably 발행 실패 시 관리자에게 재전송 오류를 표시합니다. 최신 상태 저장 후 발행에 실패한 경우 새로 접속한 이용자는 저장된 최신 문항을 볼 수 있으므로 **현재 화면 전송**으로 다시 맞춰주세요.
+- 배포 미리보기는 배포별 채널/저장소로 운영 회의와 격리합니다. 새 배포 후에는 두 기기 모두 최신 주소를 새로고침하고 같은 회의에 다시 연결해주세요.
 
 ## 회의 사용
 
