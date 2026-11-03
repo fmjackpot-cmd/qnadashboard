@@ -1,5 +1,13 @@
 # 파서 검증
 
+Windows PowerShell에서 `pnpm`을 찾지 못하면 프로젝트 폴더에서 아래 명령을 실행하세요. PATH의 Node.js 또는 이 PC에 있는 번들 Node.js를 사용하며, 전역 설치나 PATH 변경 없이 자동 테스트를 실행합니다.
+
+```powershell
+.\run-tests.bat
+```
+
+이 명령은 자동 테스트만 수행합니다. Netlify에 배포하거나 Git 커밋/푸시를 하지 않으며, 실제 Ably 네트워크 연결은 별도 확인이 필요합니다.
+
 - 전체 회귀 검증: `node --test tests/*.test.cjs`
 - 관리자 우선 회의 검증: `node --test tests/meeting.test.cjs`
 - Ably 실시간 전송 검증: `node --test tests/ably.test.cjs`

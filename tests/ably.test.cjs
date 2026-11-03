@@ -82,7 +82,10 @@ test('server generates room-scoped receive-only signed tokens using the real Abl
   assert.ok(!JSON.stringify(result).includes(secret));
 });
 
-test('token endpoint needs no admin credential and a broker failure is never reported as a successful broadcast', async () => {
+test('token endpoint needs no admin credential and a broker failure is never reported as a successful broadcast', async t => {
+  // This test deliberately breaks the broker; its expected server error should
+  // not look like a real connection failure in the test launcher's output.
+  t.mock.method(console, 'error', () => {});
   const { createHandler } = await import('../netlify/functions/meeting.mjs');
   const adminKey = 'test-only-administrator-key-24-chars';
   let reads = 0, writes = 0;
