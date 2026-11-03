@@ -12,7 +12,7 @@ const maxAge = 12 * 60 * 60 * 1000;
 export function createHandler({ store, adminKey, broker, now = Date.now, revision = randomUUID }) {
   return async request => {
     if (!['GET', 'POST'].includes(request.method)) return json({ error: '허용되지 않은 요청입니다.' }, 405);
-    if (!adminKey || adminKey.length < 24) return json({ error: '서버에 MEETING_ADMIN_KEY(24자 이상)를 설정하고 다시 배포해주세요.' }, 503);
+    if (!adminKey || adminKey.length < 6) return json({ error: '서버에 MEETING_ADMIN_KEY(6자 이상)를 설정하고 다시 배포해주세요.' }, 503);
     if (!broker) return json({ error: '서버에 ABLY_API_KEY를 설정하고 다시 배포해주세요.' }, 503);
     const url = new URL(request.url);
     const room = url.searchParams.get('room') || '';

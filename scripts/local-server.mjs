@@ -15,7 +15,7 @@ export function createLocalServer({ publishDirectory = path.join(root, 'netlify-
   const records = new Map();
   const missing = [];
   if (!env.ABLY_API_KEY || env.ABLY_API_KEY === 'your_ably_api_key_here') missing.push('ABLY_API_KEY');
-  if (!env.MEETING_ADMIN_KEY || env.MEETING_ADMIN_KEY.length < 24 || env.MEETING_ADMIN_KEY.startsWith('replace_with_')) missing.push('MEETING_ADMIN_KEY');
+  if (!env.MEETING_ADMIN_KEY || env.MEETING_ADMIN_KEY.length < 6 || env.MEETING_ADMIN_KEY.startsWith('replace_with_')) missing.push('MEETING_ADMIN_KEY');
   if (!broker && !missing.includes('ABLY_API_KEY')) {
     try { broker = createBroker({ apiKey: env.ABLY_API_KEY, namespace }); }
     catch { missing.push('ABLY_API_KEY'); }

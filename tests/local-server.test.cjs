@@ -12,7 +12,7 @@ test('local launcher serves only the built dashboard and runs the real meeting h
   await fs.writeFile(path.join(publishDirectory, 'index.html'), '<title>Dashboard local test</title>');
   await fs.writeFile(path.join(directory, '.env'), 'PRIVATE_VALUE=must-not-be-served');
   await fs.writeFile(path.join(publishDirectory, '_headers'), 'internal config');
-  const adminKey = 'test-only-local-admin-key-24-characters';
+  const adminKey = 'test06';
   const sent = [];
   const { server } = createLocalServer({ publishDirectory,
     env: { ABLY_API_KEY: 'test.key:fake-secret', MEETING_ADMIN_KEY: adminKey },

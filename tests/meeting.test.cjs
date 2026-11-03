@@ -211,3 +211,17 @@ test('state reads use strong consistency, do not cache, and expire after 12 hour
   await handler2(new Request('https://meeting.example/?room=room'));
   assert.equal(options.consistency, 'strong');
 });
+
+test('admin keys of exactly six characters authenticate; shorter keys are rejected', async () => {
+  const { createHandler, store, broker } = await setup();
+  const authenticate = (handler, key) => handler(new Request('https://meeting.example/?room=room', {
+    method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: JSON.stringify({ action: 'authenticate' })
+  }));
+  const six = createHandler({ store, broker, adminKey: 'test06' });
+  assert.equal((await authenticate(six, 'test06')).status, 200);
+  assert.equal((await authenticate(six, 'wrong6')).status, 401);
+  const five = createHandler({ store, broker, adminKey: 'test5' });
+  const rejected = await authenticate(five, 'test5');
+  assert.equal(rejected.status, 503);
+  assert.match((await rejected.json()).error, /6자 이상/);
+});

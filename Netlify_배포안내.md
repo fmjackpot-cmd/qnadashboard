@@ -22,7 +22,7 @@
 
 Ably 비밀키는 서버에만 보관합니다. 이용자에게는 한 회의 채널의 수신 권한만 담긴 1시간짜리 서명 토큰 요청을 내려주며, 갱신은 Ably SDK가 처리합니다. Ably 앱의 Pub/Sub 연결과 Netlify Functions 접근이 허용된 네트워크에서 사용하세요.
 
-1. Netlify 사이트의 환경 변수에 **`MEETING_ADMIN_KEY`**를 등록합니다. Functions에서 사용할 수 있도록 설정하고, 예측하기 어려운 24자 이상의 임의 문자열을 사용하세요. 저장소·배포 폴더·이용자 접속 주소에 키를 넣지 마세요.
+1. Netlify 사이트의 환경 변수에 **`MEETING_ADMIN_KEY`**를 등록합니다. Functions에서 사용할 수 있도록 설정하고, 6자 이상의 문자열을 사용하세요. 저장소·배포 폴더·이용자 접속 주소에 키를 넣지 마세요.
 2. 프로젝트 루트의 `netlify.toml`을 사용하는 빌드 배포를 실행합니다. Git 연동 시 build command는 `node scripts/build-netlify.cjs`, publish directory는 `netlify-deploy`, functions directory는 `netlify/functions`입니다. **GitHub 푸시는 사용자가 요청할 때만 합니다.**
 3. GitHub 공유 없이 CLI를 사용하려면 프로젝트 루트에서 의존성을 설치하고, Netlify CLI로 기존 사이트를 연결한 후 `netlify deploy --build --prod`를 실행합니다. 이 명령은 실제 사이트를 갱신하므로 배포할 때만 실행하세요.
 4. 키를 변경했으면 다시 배포하고, 관리자 화면에서도 새 키로 다시 연결합니다.
