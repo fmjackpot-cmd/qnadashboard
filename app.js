@@ -35,9 +35,7 @@ window.DashboardMeeting = {
     if (state.document && (!meetingDocument.hosted || meetingDocument.id !== state.documentId || meetingDocument.shared?.fileId !== state.document.fileId)) {
       await loadSharedPdf(state.document);
     } else if (!state.document && !meetingDocument.hosted) {
-      const pdf = window.DASHBOARD_CONFIG?.defaultPdf;
-      if (!pdf?.url) throw new Error('관리자와 같은 공통 PDF가 필요합니다. 배포된 주소에서 접속해주세요.');
-      await loadHostedPdf(pdf);
+      throw new Error('회의 자료 정보가 없습니다. 관리자가 PDF를 업로드한 뒤 다시 연결해주세요.');
     }
     if (!meetingDocument.ready || meetingDocument.id !== state.documentId) {
       throw new Error('관리자와 PDF 버전이 다릅니다. 같은 배포 주소인지 확인하고 새로고침해주세요.');
@@ -1893,37 +1891,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // 8. Mobile Sidebar & Quick Navigation Controls
   setupMobileNavigation();
 
-  // 9. Hosted deployments can provide a default document.
+  // 9. Start without a PDF. Meeting links load their uploaded document through
+  // the live-session module; individual use starts with file selection.
   renderQuestionList();
-  const defaultPdf = window.DASHBOARD_CONFIG?.defaultPdf;
-  if (defaultPdf?.url && !new URLSearchParams(window.location.search).has('room')) {
-    loadHostedPdf(defaultPdf);
-  } else {
-    console.log("대시보드가 초기화 상태로 준비되었습니다. PDF 파일을 선택하거나 드롭해주세요.");
-  }
+  console.log("대시보드가 초기화 상태로 준비되었습니다. PDF 파일을 선택하거나 회의에 연결해주세요.");
 });
-
-async function loadHostedPdf(defaultPdf) {
-  const revision = ++documentLoadRevision;
-  const overlay = document.getElementById('ai-loading-overlay');
-  const title = document.getElementById('ai-loading-title');
-  const desc = document.getElementById('ai-loading-desc');
-  if (overlay) overlay.style.display = 'flex';
-  if (title) title.innerText = '기본 PDF를 불러오는 중...';
-  if (desc) desc.innerText = defaultPdf.name || '잠시만 기다려주세요.';
-  try {
-    const response = await fetch(defaultPdf.url);
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const buffer = await response.arrayBuffer();
-    if (revision !== documentLoadRevision) return false;
-    return await loadPdfBuffer(buffer, defaultPdf.name, true);
-  } catch (error) {
-    console.error('기본 PDF 로드 실패:', error);
-    alert('기본 PDF를 불러오지 못했습니다. 새로고침하거나 PDF 파일을 직접 선택해주세요.');
-  } finally {
-    if (overlay) overlay.style.display = 'none';
-  }
-}
 
 async function loadSharedPdf(descriptor) {
   if (!descriptor || !/^[a-f0-9]{64}$/.test(descriptor.id || '')) throw new Error('회의 자료 정보가 올바르지 않습니다.');

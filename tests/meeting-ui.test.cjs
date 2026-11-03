@@ -94,16 +94,16 @@ test('actual dashboard navigation broadcasts local moves and never echoes remote
   assert.equal(context.window.DashboardMeeting.getTarget().questionId, 1);
 });
 
-test('dashboard refuses mismatched PDFs and missing questions; a local PDF returns to the hosted document', async () => {
+test('dashboard refuses mismatched PDFs and missing questions; a local PDF switches only to an uploaded meeting document', async () => {
   const { context } = appContext();
   await assert.rejects(context.window.DashboardMeeting.showTarget({ documentId: 'b'.repeat(64), mode: 'question', questionId: 1 }), /PDF.*다릅니다/);
   await assert.rejects(context.window.DashboardMeeting.showTarget({ documentId: 'a'.repeat(64), mode: 'question', questionId: 99 }), /문항/);
-  context.window.DASHBOARD_CONFIG = { defaultPdf: { url: './docs/audit-2026.pdf' } };
   vm.runInContext(`
     meetingDocument.hosted = false;
-    loadHostedPdf = async () => { meetingDocument.hosted = true; };
   `, context);
-  await context.window.DashboardMeeting.showTarget({ documentId: 'a'.repeat(64), mode: 'question', questionId: 2 });
+  await assert.rejects(context.window.DashboardMeeting.showTarget({ documentId: 'a'.repeat(64), mode: 'question', questionId: 2 }), /자료 정보/);
+  vm.runInContext('loadSharedPdf = async descriptor => { meetingDocument.hosted = true; meetingDocument.shared = descriptor; }', context);
+  await context.window.DashboardMeeting.showTarget({ document: { id: 'a'.repeat(64), fileId: 'uploaded-file' }, documentId: 'a'.repeat(64), mode: 'question', questionId: 2 });
   assert.equal(context.window.DashboardMeeting.getDocument().hosted, true);
   assert.equal(context.window.DashboardMeeting.getTarget().questionId, 2);
 });
