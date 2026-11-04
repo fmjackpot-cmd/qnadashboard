@@ -28,6 +28,11 @@ pdfjs.GlobalWorkerOptions.workerSrc = path.resolve(process.argv[3]);
   assert.equal(rows[0].startPdfPage, 13);
   assert.equal(rows[69].startPdfPage, 1089);
   assert(toc.includes(3) && toc.includes(1077));
+  vm.runInContext("currentDepartment = '행정과'", ctx);
+  const filtered = ctx.getSidebarItems();
+  assert.deepEqual(Array.from(filtered, r => r.id), [1, 3, 4, 5, 6, 10, 14, 16, 24, 26, 27, 32, 47, 64, 70, 76, 77, 78, 79, 82, 95, 98, 122, 124, 125, 126, 129, 130, 133, 144]);
+  assert.deepEqual(Array.from(filtered.slice(0, 4), ctx.sidebarButtonLabel), [1, 21, 27, 30]);
+  vm.runInContext("currentDepartment = ''", ctx);
   for (const row of rows) {
     const page = await doc.getPage(row.startPdfPage);
     const text = (await page.getTextContent()).items.map(i => i.str).join('').replace(/\s/g, '');

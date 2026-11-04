@@ -22,6 +22,7 @@ let meetingDocument = { ready: false, hosted: false, id: null };
 let pdfLoadQueue = Promise.resolve();
 let documentLoadRevision = 0;
 let currentDocumentType = 'questions';
+let currentDepartment = '';
 
 function announceNavigation(mode, questionId = null) {
   window.dispatchEvent(new CustomEvent('dashboard-navigation', { detail: { mode, questionId } }));
@@ -889,6 +890,29 @@ function parseQuestionsHeuristic(pageTexts, structure) {
   return items;
 }
 
+function receiptDepartmentInfo(raw) {
+  const compact = String(raw || '').replace(/[\s()（）,·ㆍ]/g, '');
+  const commonToAllDepartments = /본청각과|본청공통|본청각부서/.test(compact);
+  const labels = [...new Set(compact.match(/.*?(?:과|관|센터|단|교육지원청|직속기관)/g) || [compact || '공통'])];
+  const departments = labels.filter(label => !/본청각과|본청공통|본청각부서|교육지원청|직속기관|^공통$/.test(label));
+  return { departments, commonToAllDepartments, label: labels.join(' · ') };
+}
+
+function receiptStartPage(item) {
+  return Number(String(item.docPage || '').match(/^\d+/)?.[0]) || item.startPdfPage;
+}
+
+function getSidebarItems() {
+  if (currentDocumentType !== 'receipt') return currentListOrder === 'number'
+    ? [...currentItems].sort((a, b) => Number(a.id) - Number(b.id)) : currentItems;
+  return currentItems.filter(item => !currentDepartment || item.commonToAllDepartments || item.departments?.includes(currentDepartment))
+    .sort((a, b) => receiptStartPage(a) - receiptStartPage(b) || a.startPdfPage - b.startPdfPage);
+}
+
+function sidebarButtonLabel(item) {
+  return currentDocumentType === 'receipt' ? receiptStartPage(item) : Number(item.id);
+}
+
 function parseReceiptToc(pageTexts) {
   const rows = [], detectedToc = [];
   for (const page of pageTexts) {
@@ -916,11 +940,12 @@ function parseReceiptToc(pageTexts) {
       const subStart = lines.find(l => l.y < line.y - 3 && l.y > lower + 5 && /^\d+\s*-\s*\d+\s*\./.test(l.text))?.y ?? -Infinity;
       const title = [match[2], ...rest.filter(l => l.y > subStart).map(l => l.text)].join(' ').replace(/\s+/g, ' ').trim();
       const deptText = cell.filter(it => it.x >= 0.10 && it.x < 0.245).sort((a, b) => b.y - a.y || a.x - b.x).map(it => it.text).join('').replace(/[\s()（）]/g, '');
-      const departments = [...new Set(deptText.match(/.*?(?:과|관|센터|단|교육지원청|직속기관)/g) || [deptText || '공통'])];
+      const scope = receiptDepartmentInfo(deptText);
       const printed = Number(pageNumber.text.trim());
       const body = pageTexts.find(p => p.pageNum > page.pageNum && p.printedPage === printed && !detectedToc.includes(p.pageNum));
       if (!body) throw new Error(`목차 ${match[1]}번의 본문 ${printed}쪽을 찾지 못했습니다.`);
-      rows.push({ id: Number(match[1]), title, team: departments.join(' · '), category: departments.join(' · '), officer: '',
+      rows.push({ id: Number(match[1]), title, team: scope.label, category: scope.label, departments: scope.departments,
+        commonToAllDepartments: scope.commonToAllDepartments, officer: '',
         docPage: String(printed), startPdfPage: body.pageNum, tocPage: page.pageNum, settle: '', explain: '', attach: '', opinion: '' });
     });
   }
@@ -1138,6 +1163,7 @@ function renderQuestionList() {
   const listEl = document.getElementById('q-list');
   const sidebar = document.getElementById('sidebar');
   if (!listEl) return;
+  syncSidebarControls();
   listEl.innerHTML = '';
 
   if (!currentPdfDoc) {
@@ -1162,17 +1188,20 @@ function renderQuestionList() {
   // Number order uses one ungrouped list without changing document navigation.
   const categoryOrder = [];
   const groups = Object.create(null);
-  const orderedItems = currentListOrder === 'number'
-    ? [...currentItems].sort((a, b) => Number(a.id) - Number(b.id))
-    : currentItems;
+  const orderedItems = getSidebarItems();
+  const grouped = currentDocumentType !== 'receipt' && currentListOrder === 'category';
   orderedItems.forEach(item => {
-    const cat = currentListOrder === 'number' ? '' : (item.category || "일반");
+    const cat = grouped ? (item.category || "일반") : '';
     if (!groups[cat]) {
       groups[cat] = [];
       categoryOrder.push(cat);
     }
     groups[cat].push(item);
   });
+  if (!orderedItems.length) {
+    listEl.textContent = '선택한 부서에 해당하는 자료가 없습니다.';
+    return;
+  }
 
   // Apply CSS class based on active list view mode
   if (currentListViewMode === 'list') {
@@ -1190,7 +1219,7 @@ function renderQuestionList() {
     const groupEl = document.createElement('div');
     groupEl.className = 'cat-group';
 
-    if (currentListOrder === 'category') {
+    if (grouped) {
       const headerEl = document.createElement('div');
       headerEl.className = 'cat-header';
       const titleEl = document.createElement('span');
@@ -1210,7 +1239,7 @@ function renderQuestionList() {
         const btn = document.createElement('button');
         const isActive = (currentViewMode === 'question' && selectedQuestionId === id);
         btn.className = `btn-q-num ${isActive ? 'active' : ''}`;
-        btn.innerText = id;
+        btn.innerText = sidebarButtonLabel(item);
         const officerStr = item.officer ? `\n담당: ${item.officer}` : '';
         const pageStr = item.docPage ? `문서 ${item.docPage}쪽` : `PDF ${item.startPdfPage}p`;
         const tooltipStr = `[문항 ${id}] ${pageStr} (PDF ${item.startPdfPage}p) ${item.title}${officerStr}`;
@@ -1249,7 +1278,7 @@ function renderQuestionList() {
 
         itemEl.innerHTML = `
           <div class="q-title-top-row">
-            <span class="q-title-badge">${id}</span>
+            <span class="q-title-badge">${sidebarButtonLabel(item)}</span>
             <span class="q-title-page-hint">${pageLabel}</span>
           </div>
           <div class="q-title-text" title="${item.title}">${item.title}</div>
@@ -1279,6 +1308,47 @@ function renderQuestionList() {
   }
 }
 
+function syncSidebarControls() {
+  const receipt = currentDocumentType === 'receipt';
+  const filter = document.getElementById('receipt-department-filter');
+  const select = document.getElementById('receipt-department');
+  if (filter) filter.hidden = !receipt;
+  if (receipt && select) {
+    const names = [...new Set(currentItems.flatMap(item => item.departments || []))].sort((a, b) => a.localeCompare(b, 'ko'));
+    if (currentDepartment && !names.includes(currentDepartment)) currentDepartment = '';
+    const signature = JSON.stringify(names);
+    if (select.dataset.departments !== signature) {
+      select.innerHTML = '';
+      for (const name of ['', ...names]) {
+        const option = document.createElement('option');
+        option.value = name;
+        option.textContent = name || '전체 부서';
+        select.appendChild(option);
+      }
+      select.dataset.departments = signature;
+    }
+    select.value = currentDepartment;
+    select.onchange = () => { currentDepartment = select.value; renderQuestionList(); };
+    const count = document.getElementById('receipt-filter-count');
+    if (count) count.textContent = `${getSidebarItems().length}건 · 본청 공통 포함`;
+  }
+  const label = document.getElementById('grid-button-label');
+  if (label) label.textContent = receipt ? '쪽번호 버튼' : '번호 버튼';
+  const grid = document.getElementById('tab-btn-grid');
+  if (grid) grid.title = receipt ? '문서 시작 쪽번호로 자료 선택' : '3열 번호 버튼 모드';
+  const category = document.getElementById('btn-order-category');
+  if (category) category.hidden = receipt;
+  const number = document.getElementById('btn-order-number');
+  if (number) {
+    number.textContent = receipt ? '페이지순' : '번호순';
+    number.title = receipt ? '문서 시작 쪽번호 오름차순' : '전체 문항을 번호 오름차순으로 보기';
+    number.disabled = receipt;
+  }
+  for (const [button, active] of [[category, !receipt && currentListOrder === 'category'], [number, receipt || currentListOrder === 'number']]) {
+    if (button) { button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); }
+  }
+}
+
 function setupSidebarTabs() {
   const btnGrid = document.getElementById('tab-btn-grid');
   const btnList = document.getElementById('tab-btn-list');
@@ -1289,6 +1359,7 @@ function setupSidebarTabs() {
   orderButtons.forEach(([button, order]) => {
     if (!button) return;
     button.onclick = () => {
+      if (currentDocumentType === 'receipt') return;
       if (currentListOrder === order) return;
       currentListOrder = order;
       orderButtons.forEach(([candidate, value]) => {
@@ -1608,6 +1679,8 @@ async function loadPdfBufferNow(buffer, fileName, hosted = false, documentType =
   currentPdfBytes = buffer.slice(0);
   ++viewRenderRevision;
   currentDocumentType = documentType === 'receipt' ? 'receipt' : 'questions';
+  currentDepartment = '';
+  currentListOrder = 'number';
   meetingDocument = { ready: false, hosted, id: null, documentType: currentDocumentType };
   currentPdfFileName = fileName || "결산예상질의_답변서.pdf";
 
@@ -2046,26 +2119,28 @@ function toggleMobileSidebar() {
 
 // Previous / Next Question Navigation
 function goToPrevQuestion() {
-  if (!currentItems || currentItems.length === 0) return;
-  if (!selectedQuestionId) {
-    openQuestion(currentItems[0].id, true);
+  const items = getSidebarItems();
+  if (!items.length) return;
+  const currentIdx = items.findIndex(item => Number(item.id) === Number(selectedQuestionId));
+  if (currentIdx < 0) {
+    openQuestion(items[0].id, true);
     return;
   }
-  const currentIdx = currentItems.findIndex(item => Number(item.id) === Number(selectedQuestionId));
   if (currentIdx > 0) {
-    openQuestion(currentItems[currentIdx - 1].id, true);
+    openQuestion(items[currentIdx - 1].id, true);
   }
 }
 
 function goToNextQuestion() {
-  if (!currentItems || currentItems.length === 0) return;
-  if (!selectedQuestionId) {
-    openQuestion(currentItems[0].id, true);
+  const items = getSidebarItems();
+  if (!items.length) return;
+  const currentIdx = items.findIndex(item => Number(item.id) === Number(selectedQuestionId));
+  if (currentIdx < 0) {
+    openQuestion(items[0].id, true);
     return;
   }
-  const currentIdx = currentItems.findIndex(item => Number(item.id) === Number(selectedQuestionId));
-  if (currentIdx >= 0 && currentIdx < currentItems.length - 1) {
-    openQuestion(currentItems[currentIdx + 1].id, true);
+  if (currentIdx < items.length - 1) {
+    openQuestion(items[currentIdx + 1].id, true);
   }
 }
 
@@ -2085,7 +2160,7 @@ function setupMobileNavigation() {
 
   // Keyboard navigation (Left / Right arrow keys)
   window.addEventListener('keydown', (e) => {
-    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+    if (e.target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
     if (e.key === 'ArrowLeft') {
       goToPrevQuestion();
     } else if (e.key === 'ArrowRight') {
