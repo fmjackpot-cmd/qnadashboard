@@ -21,6 +21,7 @@ let viewRenderRevision = 0;
 let meetingDocument = { ready: false, hosted: false, id: null };
 let pdfLoadQueue = Promise.resolve();
 let documentLoadRevision = 0;
+let currentDocumentType = 'questions';
 
 function announceNavigation(mode, questionId = null) {
   window.dispatchEvent(new CustomEvent('dashboard-navigation', { detail: { mode, questionId } }));
@@ -241,6 +242,8 @@ async function extractAllPagesText(pdfDoc) {
       pages.push({
         pageNum: p,
         text: str,
+        layout: (currentDocumentType === 'receipt' && detectedPrintedPage === null) || (/소\s*관\s*부\s*서/.test(str) && /쪽\s*번\s*호/.test(str))
+          ? items.filter(it => it.str?.trim()).map(it => ({ text: it.str, x: it.transform[4] / unscaled.width, y: it.transform[5] })) : [],
         footerText: footerRaw,
         printedPage: detectedPrintedPage
       });
@@ -252,8 +255,15 @@ async function extractAllPagesText(pdfDoc) {
           printedToPdfMap[detectedPrintedPage] = p;
         }
       }
+      if (currentDocumentType === 'receipt') page.cleanup?.();
     } catch (err) {
+      if (currentDocumentType === 'receipt') throw new Error(`PDF ${p}쪽을 읽지 못했습니다. 파일을 다시 확인해주세요.`);
       pages.push({ pageNum: p, text: "", footerText: "", printedPage: null });
+    }
+    if (p % 25 === 0) {
+      const progress = typeof document !== 'undefined' && document.getElementById('ai-loading-desc');
+      if (progress) progress.innerText = `PDF 분석 중 · ${p}/${maxPages}쪽`;
+      if (typeof setTimeout !== 'undefined') await new Promise(resolve => setTimeout(resolve, 0));
     }
   }
 
@@ -879,6 +889,57 @@ function parseQuestionsHeuristic(pageTexts, structure) {
   return items;
 }
 
+function parseReceiptToc(pageTexts) {
+  const rows = [], detectedToc = [];
+  for (const page of pageTexts) {
+    const compact = page.text.replace(/\s/g, '');
+    const header = compact.includes('소관부서') && compact.includes('요구자료') && compact.includes('쪽번호');
+    const continuation = detectedToc[detectedToc.length - 1] === page.pageNum - 1 && page.printedPage === null;
+    if (!header && !continuation) continue;
+    const lines = [];
+    for (const item of (page.layout || []).filter(it => it.x >= 0.245 && it.x < 0.79).sort((a, b) => b.y - a.y || a.x - b.x)) {
+      let line = lines.find(l => Math.abs(l.y - item.y) < 3);
+      if (!line) { line = { y: item.y, items: [] }; lines.push(line); }
+      line.items.push(item);
+    }
+    lines.forEach(line => { line.text = line.items.sort((a, b) => a.x - b.x).map(it => it.text).join(' ').trim(); });
+    const starts = lines.filter(line => /^\d+\s*\./.test(line.text));
+    if (!starts.length) continue;
+    detectedToc.push(page.pageNum);
+    starts.forEach((line, index) => {
+      const match = line.text.match(/^(\d+)\s*\.\s*(.*)/);
+      const lower = starts[index + 1]?.y ?? -Infinity;
+      const cell = (page.layout || []).filter(it => it.y <= line.y + 5 && it.y > lower + 5);
+      const pageNumber = cell.find(it => it.x >= 0.79 && /^\s*\d+\s*$/.test(it.text));
+      if (!pageNumber) throw new Error(`목차 ${match[1]}번의 쪽번호를 확인하지 못했습니다.`);
+      const rest = lines.filter(l => l.y < line.y - 3 && l.y > lower + 5 && !/^\d+\s*-\s*\d+\s*\./.test(l.text));
+      const subStart = lines.find(l => l.y < line.y - 3 && l.y > lower + 5 && /^\d+\s*-\s*\d+\s*\./.test(l.text))?.y ?? -Infinity;
+      const title = [match[2], ...rest.filter(l => l.y > subStart).map(l => l.text)].join(' ').replace(/\s+/g, ' ').trim();
+      const deptText = cell.filter(it => it.x >= 0.10 && it.x < 0.245).sort((a, b) => b.y - a.y || a.x - b.x).map(it => it.text).join('').replace(/[\s()（）]/g, '');
+      const departments = [...new Set(deptText.match(/.*?(?:과|관|센터|단|교육지원청|직속기관)/g) || [deptText || '공통'])];
+      const printed = Number(pageNumber.text.trim());
+      const body = pageTexts.find(p => p.pageNum > page.pageNum && p.printedPage === printed && !detectedToc.includes(p.pageNum));
+      if (!body) throw new Error(`목차 ${match[1]}번의 본문 ${printed}쪽을 찾지 못했습니다.`);
+      rows.push({ id: Number(match[1]), title, team: departments.join(' · '), category: departments.join(' · '), officer: '',
+        docPage: String(printed), startPdfPage: body.pageNum, tocPage: page.pageNum, settle: '', explain: '', attach: '', opinion: '' });
+    });
+  }
+  if (!rows.length) throw new Error('수감자료 목차를 찾지 못했습니다. 자료구분과 PDF 양식을 확인해주세요.');
+  const declared = pageTexts.reduce((sum, page) => sum + [...page.text.replace(/\s/g, '').matchAll(/(?:공통요구자료|소관요구자료)\((\d+)건\)/g)].reduce((n, match) => n + Number(match[1]), 0), 0);
+  if (declared && rows.length !== declared) throw new Error(`목차에 기재된 ${declared}건 중 ${rows.length}건만 읽었습니다. 원본 양식을 확인해주세요.`);
+  rows.sort((a, b) => a.id - b.id);
+  if (new Set(rows.map(r => r.id)).size !== rows.length || rows.some((r, i) => i && r.startPdfPage <= rows[i - 1].startPdfPage)) throw new Error('수감자료 목차 순서가 맞지 않습니다. 원본을 확인해주세요.');
+  rows.forEach((row, i) => {
+    let end = (rows[i + 1]?.startPdfPage || pageTexts.length + 1) - 1;
+    while (end > row.startPdfPage && !pageTexts[end - 1]?.printedPage) end--;
+    row.endPdfPage = end;
+    row.pageCount = end - row.startPdfPage + 1;
+    const printedEnd = pageTexts[end - 1]?.printedPage;
+    if (printedEnd && String(printedEnd) !== row.docPage) row.docPage += `~${printedEnd}`;
+  });
+  return { items: rows, tocPages: detectedToc };
+}
+
 // ==========================================================================
 // 3. AI-BASED PARSER (Multi-Model Resilient Fallback)
 // ==========================================================================
@@ -894,6 +955,13 @@ async function parseUploadedPdf(pdfDoc, fileName) {
 
   // 1. Fast Full Text Extraction
   const pageTexts = await extractAllPagesText(pdfDoc);
+  if (currentDocumentType === 'receipt') {
+    const parsed = parseReceiptToc(pageTexts);
+    currentItems = parsed.items;
+    tocPages = parsed.tocPages;
+    if (loadingOverlay) loadingOverlay.style.display = 'none';
+    return;
+  }
   
   // 2. Analyze Document Structure (Cover & TOC detection)
   const structure = analyzeDocumentStructure(pageTexts);
@@ -1525,13 +1593,13 @@ function applyZoom(newScale) {
 // 7. PDF FILE LOADING & DYNAMIC REFRESH PIPELINE
 // ==========================================================================
 
-async function loadPdfBuffer(buffer, fileName, hosted = false) {
-  const task = pdfLoadQueue.catch(() => {}).then(() => loadPdfBufferNow(buffer, fileName, hosted));
+async function loadPdfBuffer(buffer, fileName, hosted = false, documentType = 'questions') {
+  const task = pdfLoadQueue.catch(() => {}).then(() => loadPdfBufferNow(buffer, fileName, hosted, documentType));
   pdfLoadQueue = task;
   return task;
 }
 
-async function loadPdfBufferNow(buffer, fileName, hosted = false) {
+async function loadPdfBufferNow(buffer, fileName, hosted = false, documentType = 'questions') {
   if (!buffer || buffer.byteLength === 0) {
     alert("선택한 파일이 비어있습니다.");
     return;
@@ -1539,7 +1607,8 @@ async function loadPdfBufferNow(buffer, fileName, hosted = false) {
 
   currentPdfBytes = buffer.slice(0);
   ++viewRenderRevision;
-  meetingDocument = { ready: false, hosted, id: null };
+  currentDocumentType = documentType === 'receipt' ? 'receipt' : 'questions';
+  meetingDocument = { ready: false, hosted, id: null, documentType: currentDocumentType };
   currentPdfFileName = fileName || "결산예상질의_답변서.pdf";
 
   // Reset items to ensure fresh parse for uploaded file
@@ -1576,6 +1645,8 @@ async function loadPdfBufferNow(buffer, fileName, hosted = false) {
     return true;
   } catch (err) {
     console.error("Error loading PDF:", err);
+    const loadingOverlay = document.getElementById('ai-loading-overlay');
+    if (loadingOverlay) loadingOverlay.style.display = 'none';
     alert("PDF 파일을 불러오는 중 오류가 발생했습니다: " + (err && err.message ? err.message : err));
     return false;
   }
@@ -1602,7 +1673,7 @@ function processPdfFile(file) {
   const reader = new FileReader();
   reader.onload = (ev) => {
     if (ev.target && ev.target.result) {
-      loadPdfBuffer(ev.target.result, file.name);
+      loadPdfBuffer(ev.target.result, file.name, false, document.getElementById('start-document-type')?.value || 'questions');
     }
   };
   reader.onerror = (err) => {
@@ -1910,20 +1981,35 @@ async function loadSharedPdf(descriptor) {
   if (desc) desc.innerText = descriptor.name || '회의 자료';
   let loadingStarted = false;
   try {
-    const response = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(30000) });
-    if (!response.ok) throw new Error('회의 PDF를 다운로드하지 못했습니다. 다시 연결해주세요.');
-    const bytes = await response.arrayBuffer();
-    if (bytes.byteLength > 4500000) throw new Error('회의 PDF는 4.5MB 이하만 지원합니다.');
+    const parts = descriptor.parts || 1;
+    if (!Number.isSafeInteger(parts) || parts < 1 || parts > 17 || (descriptor.parts && (!Number.isSafeInteger(descriptor.size) || descriptor.size < 1 || descriptor.size > 50000000 || parts !== Math.ceil(descriptor.size / 3000000)))) throw new Error('회의 PDF 크기 정보가 올바르지 않습니다.');
+    const chunks = [];
+    let total = 0;
+    for (let part = 0; part < parts; part++) {
+      if (revision !== documentLoadRevision) throw new Error('다른 자료를 불러오는 중입니다.');
+      if (descriptor.parts) url.searchParams.set('part', part);
+      if (desc) desc.innerText = `${descriptor.name || '회의 자료'} · 다운로드 ${part + 1}/${parts}`;
+      const response = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(60000) });
+      if (!response.ok) throw new Error('회의 PDF를 다운로드하지 못했습니다. 다시 연결해주세요.');
+      const chunk = new Uint8Array(await response.arrayBuffer());
+      if (chunk.byteLength > 4500000 || (descriptor.parts && chunk.byteLength !== Math.min(3000000, descriptor.size - total))) throw new Error('회의 PDF 조각 크기가 올바르지 않습니다.');
+      total += chunk.byteLength;
+      chunks.push(chunk);
+    }
+    const merged = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) { merged.set(chunk, offset); offset += chunk.length; }
+    const bytes = merged.buffer;
     const hash = await window.crypto.subtle.digest('SHA-256', bytes);
     const id = Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('');
     if (id !== descriptor.id) throw new Error('회의 PDF 검증에 실패했습니다. 관리자가 자료를 다시 전송해주세요.');
     if (revision !== documentLoadRevision) throw new Error('다른 자료를 불러오는 중입니다. 다시 시도해주세요.');
     loadingStarted = true;
-    if (!await loadPdfBuffer(bytes, descriptor.name, true)) throw new Error('회의 PDF를 분석하지 못했습니다.');
+    if (!await loadPdfBuffer(bytes, descriptor.name, true, descriptor.documentType)) throw new Error('회의 PDF를 분석하지 못했습니다.');
     meetingDocument.shared = descriptor;
   } catch (error) {
     if (loadingStarted && previous?.document.ready && revision === documentLoadRevision) {
-      await loadPdfBuffer(previous.bytes, previous.name, previous.document.hosted);
+      await loadPdfBuffer(previous.bytes, previous.name, previous.document.hosted, previous.document.documentType);
       meetingDocument = previous.document;
       if (previous.target.mode === 'question') await openQuestion(previous.target.questionId, true, false);
       else await openTocView(true, false);

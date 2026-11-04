@@ -1,9 +1,66 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { createHash } = require('node:crypto');
-const { MeetingSession } = require('../live-session.js');
+const { MeetingSession, uploadPdfParts } = require('../live-session.js');
 const adminKey = 'test06';
 const pdf = name => new File([`%PDF-1.7\n${name}\n%%EOF`], `${name}.pdf`, { type: 'application/pdf' });
+
+test('25MB PDF transfers in bounded requests, preserves its mode, and verifies the reconstructed bytes', async () => {
+  const f = await fixture();
+  const bytes = Buffer.alloc(25_000_000, 42);
+  bytes.write('%PDF-1.7\n');
+  const file = new File([bytes], '수감자료.pdf', { type: 'application/pdf' });
+  const sizes = [], progress = [];
+  const { document } = await uploadPdfParts({ room: 'receipt', file, key: adminKey, documentType: 'receipt',
+    endpoint: 'https://dashboard.test/.netlify/functions/meeting-document', crypto: require('node:crypto').webcrypto,
+    onProgress: value => progress.push(value), fetcher: async (url, options) => {
+      const request = new Request(url, options);
+      const size = (await request.clone().arrayBuffer()).byteLength;
+      sizes.push(size);
+      return f.fileHandler(request);
+    } });
+  assert.equal(document.parts, 9);
+  assert.equal(document.documentType, 'receipt');
+  assert.equal(document.size, file.size);
+  assert(sizes.every(size => size <= 3_000_000));
+  assert.equal(f.published.length, 0);
+  const chunks = [];
+  for (let part = 0; part < document.parts; part++) {
+    const url = new URL(document.url, 'https://dashboard.test');
+    url.searchParams.set('part', part);
+    const response = await f.fileHandler(new Request(url));
+    assert.equal(response.status, 200);
+    chunks.push(Buffer.from(await response.arrayBuffer()));
+    url.searchParams.set('room', 'other');
+    assert.equal((await f.fileHandler(new Request(url))).status, 404);
+  }
+  assert.deepEqual(Buffer.concat(chunks), bytes);
+  assert.equal(createHash('sha256').update(Buffer.concat(chunks)).digest('hex'), document.id);
+  await f.request('receipt', { action: 'set-document', fileId: document.fileId, documentId: document.id, mode: 'question', questionId: 70 }, adminKey);
+  assert.equal(f.published[0].document.documentType, 'receipt');
+  assert.equal(f.published[0].document.parts, 9);
+  assert(progress.length >= 9);
+});
+
+test('incomplete, corrupt, expired, and unauthorized chunk uploads cannot become active documents', async () => {
+  const f = await fixture();
+  const base = 'https://dashboard.test/.netlify/functions/meeting-document?room=room';
+  const post = (url, body, key = adminKey) => f.fileHandler(new Request(url, { method: 'POST', headers: { Authorization: `Bearer ${key}` }, body }));
+  const payload = JSON.stringify({ size: 6, id: 'a'.repeat(64), name: 'test.pdf', documentType: 'receipt' });
+  assert.equal((await post(base + '&action=init', payload, 'bad')).status, 401);
+  const init = await (await post(base + '&action=init', payload)).json();
+  const url = `${base}&upload=${init.uploadId}`;
+  assert.equal((await post(url + '&action=complete', '')).status, 409);
+  assert.equal((await post(url + '&action=part&part=1', '%PDF-a')).status, 400);
+  assert.equal((await post(url + '&action=part&part=0', 'broken')).status, 400);
+  assert.equal((await post(url + '&action=part&part=0', '%PDF-a')).status, 200);
+  assert.equal((await post(url + '&action=complete', '')).status, 409);
+  assert.equal(f.files.has(init.uploadId), false);
+  const metadata = f.files.get(`${init.uploadId}/pending`).metadata;
+  metadata.createdAt -= 3600001;
+  assert.equal((await post(url + '&action=complete', '')).status, 404);
+  assert.equal(f.published.length, 0);
+});
 
 async function fixture() {
   const { createDocumentHandler, MAX_PDF_BYTES } = await import('../netlify/lib/meeting-documents.mjs');
@@ -134,7 +191,7 @@ test('oversize files and concurrent file changes are rejected before replacing t
   const admin = new MeetingSession({ request: async () => ({ state: { revision: 'ok' } }), getDocument() {},
     getTarget: () => ({ mode: 'question', questionId: 1 }), uploadFile: async () => { await pending; return { document: { id: 'a'.repeat(64), fileId: 'test' } }; }, showDocument: async () => {} });
   await admin.join('room', adminKey);
-  await assert.rejects(admin.shareFile({ name: 'big.pdf', size: 4500001 }), /4.5MB/);
+  await assert.rejects(admin.shareFile({ name: 'big.pdf', size: 50000001 }), /50MB/);
   const first = admin.shareFile(pdf('one'));
   await assert.rejects(admin.shareFile(pdf('two')), /처리하는 중/);
   release();

@@ -1,6 +1,37 @@
 (function (root) {
   'use strict';
 
+  async function uploadPdfParts({ room, file, key, endpoint, documentType = 'questions', fetcher = root.fetch.bind(root), crypto = root.crypto, onProgress = () => {} }) {
+    const url = new URL(endpoint);
+    url.searchParams.set('room', room);
+    const send = async (target, body, headers = {}) => {
+      const response = await fetcher(target, { method: 'POST', body, signal: AbortSignal.timeout(60000),
+        headers: { Authorization: `Bearer ${key}`, ...headers } });
+      let result;
+      try { result = await response.json(); } catch { throw new Error('업로드 응답을 확인하지 못했습니다. 다시 시도해주세요.'); }
+      if (!response.ok) throw new Error(result.error || 'PDF 업로드에 실패했습니다.');
+      return result;
+    };
+    if (file.size <= 4500000) return send(url, file, { 'Content-Type': 'application/pdf', 'X-Pdf-Name': encodeURIComponent(file.name), 'X-Document-Type': documentType });
+    if (file.size > 50000000) throw new Error('PDF는 최대 50MB까지 업로드할 수 있습니다.');
+    const bytes = await file.arrayBuffer();
+    const hash = await crypto.subtle.digest('SHA-256', bytes);
+    const id = Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, '0')).join('');
+    url.searchParams.set('action', 'init');
+    const init = await send(url, JSON.stringify({ name: file.name, size: file.size, id, documentType }), { 'Content-Type': 'application/json' });
+    url.searchParams.set('upload', init.uploadId);
+    for (let part = 0; part < init.parts; part++) {
+      url.searchParams.set('action', 'part');
+      url.searchParams.set('part', part);
+      onProgress(`PDF 업로드 중 · ${part + 1}/${init.parts}`);
+      await send(url, file.slice(part * init.partBytes, (part + 1) * init.partBytes), { 'Content-Type': 'application/octet-stream' });
+    }
+    url.searchParams.set('action', 'complete');
+    url.searchParams.delete('part');
+    onProgress('PDF 원본 검증 중...');
+    return send(url, '');
+  }
+
   class MeetingSession {
     constructor({ request, subscribe, uploadFile, showDocument, getTarget, getDocument, showTarget, onStatus = () => {} }) {
       Object.assign(this, { request, subscribe, uploadFile, showDocument, getTarget, getDocument, showTarget, onStatus });
@@ -146,7 +177,7 @@
       if (!this.active || this.role !== 'admin') throw new Error('관리자로 회의에 연결해주세요.');
       if (this.documentBusy) throw new Error('자료를 처리하는 중입니다. 완료 후 다시 선택해주세요.');
       if (!file || !file.size || (!file.name?.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf')) throw new Error('회의에 사용할 PDF 파일을 선택해주세요.');
-      if (file.size > 4500000) throw new Error('PDF는 4.5MB 이하만 업로드할 수 있습니다.');
+      if (file.size > 50000000) throw new Error('PDF는 최대 50MB까지 업로드할 수 있습니다.');
       const generation = this.generation;
       const room = this.room, key = this.key;
       this.documentBusy = true;
@@ -228,7 +259,7 @@
     };
   }
 
-  if (typeof module !== 'undefined' && module.exports) module.exports = { MeetingSession, createAblySubscriber };
+  if (typeof module !== 'undefined' && module.exports) module.exports = { MeetingSession, createAblySubscriber, uploadPdfParts };
   root.MeetingSession = MeetingSession;
   if (!root.document) return;
 
@@ -285,13 +316,8 @@
       showDocument: descriptor => root.DashboardMeeting.showDocument(descriptor),
       uploadFile: async (room, file, key) => {
         const url = new URL(root.DASHBOARD_CONFIG?.meetingDocumentEndpoint || '/.netlify/functions/meeting-document', location.href);
-        url.searchParams.set('room', room);
-        const response = await fetch(url, { method: 'POST', body: file, signal: AbortSignal.timeout(45000),
-          headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/pdf', 'X-Pdf-Name': encodeURIComponent(file.name) } });
-        let result;
-        try { result = await response.json(); } catch { throw new Error('업로드에 실패했습니다. PDF 크기와 서버 배포 상태를 확인해주세요.'); }
-        if (!response.ok) throw new Error(result.error || 'PDF 업로드에 실패했습니다.');
-        return result;
+        return uploadPdfParts({ room, file, key, endpoint: url, documentType: el('meeting-document-type')?.value || 'questions',
+          onProgress: message => session.onStatus('uploading', message) });
       },
       subscribe: createAblySubscriber({ loadSdk, getToken: room => request(room, null, null, 'token') }),
       getDocument: () => root.DashboardMeeting.getDocument(),
@@ -345,6 +371,8 @@
     };
     const openMeeting = (role, file = null) => {
       setRole(role);
+      const type = root.DashboardMeeting.getDocument().documentType;
+      el('meeting-document-type').value = type || el('start-document-type').value || 'questions';
       pendingStartFile = file;
       el('meeting-pdf').value = '';
       el('meeting-pdf-hint').textContent = file ? `선택한 자료: ${file.name} · 관리자 인증 후 업로드합니다.`

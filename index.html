@@ -21,7 +21,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.9/pdf-lib.min.js"></script>
 
   <!-- External Stylesheet -->
-  <link rel="stylesheet" href="style.css?v=20261103-start-roles">
+  <link rel="stylesheet" href="style.css?v=20261104-receipt-parts">
 </head>
 <body>
 
@@ -151,6 +151,11 @@
       <span class="start-brand"><i class="fa-solid fa-layer-group" aria-hidden="true"></i> 예상질의 대시보드</span>
       <h1 id="start-heading">회의를 시작하세요</h1>
       <p class="start-description">관리자로 자료를 공유하거나, 진행 중인 회의에 참여하세요.</p>
+      <label class="document-type-label" for="start-document-type">자료구분 <small>관리자는 업로드 전에 선택해주세요</small></label>
+      <select id="start-document-type" class="document-type-select">
+        <option value="questions">예상질의·답변서</option>
+        <option value="receipt">행정사무감사 수감자료</option>
+      </select>
       <div class="start-options">
         <button type="button" class="start-option start-option-admin" id="start-admin" aria-haspopup="dialog" aria-controls="meeting-dialog">
           <span class="start-option-icon"><i class="fa-solid fa-user-shield" aria-hidden="true"></i></span>
@@ -255,7 +260,12 @@
       <fieldset id="meeting-admin-fields" hidden disabled>
       <label for="meeting-key">관리자 인증키</label>
       <input id="meeting-key" type="password" autocomplete="off" placeholder="서버에 설정한 관리자 인증키 (6자 이상)">
-      <label for="meeting-pdf">회의 PDF <small>관리자만 선택 · 최대 4.5MB</small></label>
+      <label for="meeting-document-type">자료구분</label>
+      <select id="meeting-document-type" class="document-type-select">
+        <option value="questions">예상질의·답변서</option>
+        <option value="receipt">행정사무감사 수감자료</option>
+      </select>
+      <label for="meeting-pdf">회의 PDF <small>관리자만 선택 · 최대 50MB</small></label>
       <input id="meeting-pdf" type="file" accept="application/pdf,.pdf">
       <p class="meeting-pdf-hint" id="meeting-pdf-hint">PDF를 선택하면 업로드 후 회의가 시작됩니다. 이미 문서가 열려 있다면 해당 PDF를 사용할 수 있습니다.</p>
       <button type="submit" id="meeting-admin">PDF 업로드 후 회의 시작</button>
@@ -272,7 +282,7 @@
     <button type="button" id="meeting-leave" hidden>회의 연결 해제</button>
   </dialog>
   <script src="dashboard-config.js?v=20261103-empty-start" defer></script>
-  <script src="app.js?v=20261103-start-roles" defer></script>
-  <script src="live-session.js?v=20261103-start-roles" defer></script>
+  <script src="app.js?v=20261104-receipt-parts" defer></script>
+  <script src="live-session.js?v=20261104-receipt-parts" defer></script>
 </body>
 </html>

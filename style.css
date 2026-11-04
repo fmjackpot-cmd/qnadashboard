@@ -1274,3 +1274,6 @@ aside.sidebar.mode-title-list {
 }
 
 
+.document-type-label { display: block; margin: 20px 0 8px; font-weight: 600; color: #334155; }
+.document-type-label small { margin-left: 8px; font-weight: 400; color: #64748b; }
+.document-type-select { width: 100%; padding: 12px; margin-bottom: 18px; border: 1px solid #cbd5e1; border-radius: 10px; background: #fff; color: #0f172a; font: inherit; }

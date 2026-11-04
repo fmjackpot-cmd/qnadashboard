@@ -48,6 +48,9 @@ test('meeting form authenticates, clears the key field, and shares a viewer URL 
   assert.equal(elements.get('meeting-viewer').hidden, false);
   assert.equal(elements.get('meeting-room').value, '');
   elements.get('start-admin').onclick();
+  elements.get('start-document-type').value = 'receipt';
+  elements.get('start-admin').onclick();
+  assert.equal(elements.get('meeting-document-type').value, 'receipt');
   assert.equal(elements.get('meeting-admin-fields').hidden, false);
   assert.equal(elements.get('meeting-admin-fields').disabled, false);
   assert.equal(elements.get('meeting-viewer').hidden, true);
@@ -156,4 +159,38 @@ test('shared PDF loader checks downloaded bytes before replacing a document and 
   await context.window.DashboardMeeting.showTarget({ document: descriptor, documentId: descriptor.id, mode: 'question', questionId: 2 });
   assert.equal(downloads, 0);
   assert.equal(context.window.DashboardMeeting.getTarget().questionId, 2);
+});
+
+test('dashboard assembles chunk downloads, applies the shared document type and rejects corrupted or missing parts', async () => {
+  const { context } = appContext();
+  const { createHash } = require('node:crypto');
+  const bytes = Buffer.alloc(6_100_000, 42);
+  bytes.write('%PDF-1.7\n');
+  context.window.crypto = webcrypto;
+  context.window.location = { href: 'https://dashboard.example/index.html' };
+  context.URL = URL;
+  context.AbortSignal = AbortSignal;
+  context.document.getElementById = () => null;
+  context.alert = () => {};
+  context.pdfjsLib = { getDocument: () => ({ promise: Promise.resolve({}) }) };
+  vm.runInContext('renderQuestionList = () => {}; parseUploadedPdf = async () => { currentItems = [{ id: 1 }]; };', context);
+  const descriptor = { id: createHash('sha256').update(bytes).digest('hex'), fileId: '12345678-1234-1234-1234-123456789abc',
+    name: 'receipt.pdf', documentType: 'receipt', parts: 3, size: bytes.length,
+    url: '/.netlify/functions/meeting-document?room=test&file=12345678-1234-1234-1234-123456789abc' };
+  const parts = [];
+  context.fetch = async url => {
+    const part = Number(url.searchParams.get('part'));
+    parts.push(part);
+    const chunk = bytes.subarray(part * 3000000, (part + 1) * 3000000);
+    return { ok: true, arrayBuffer: async () => chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.length) };
+  };
+  await context.window.DashboardMeeting.showDocument(descriptor);
+  assert.deepEqual(parts, [0, 1, 2]);
+  assert.equal(context.window.DashboardMeeting.getDocument().documentType, 'receipt');
+  context.fetch = async () => ({ ok: false });
+  await assert.rejects(context.window.DashboardMeeting.showDocument(descriptor), /다운로드/);
+  assert.equal(context.window.DashboardMeeting.getDocument().id, descriptor.id);
+  context.fetch = async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(1) });
+  await assert.rejects(context.window.DashboardMeeting.showDocument(descriptor), /조각 크기/);
+  await assert.rejects(context.window.DashboardMeeting.showDocument({ ...descriptor, parts: 18 }), /크기 정보/);
 });
