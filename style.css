@@ -1274,9 +1274,11 @@ aside.sidebar.mode-title-list {
 }
 
 
-.document-type-label { display: block; margin: 20px 0 8px; font-weight: 600; color: #334155; }
-.document-type-label small { margin-left: 8px; font-weight: 400; color: #64748b; }
-.document-type-select { width: 100%; padding: 12px; margin-bottom: 18px; border: 1px solid #cbd5e1; border-radius: 10px; background: #fff; color: #0f172a; font: inherit; }
+.meeting-dialog .document-type-options { display: grid; gap: 8px; margin: 14px 0; padding: 0; border: 0; }
+.document-type-options legend { margin-bottom: 8px; color: #334155; font-size: 14px; font-weight: 600; }
+.meeting-dialog .document-type-options label { display: flex; align-items: center; gap: 8px; margin: 0; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; cursor: pointer; }
+.meeting-dialog .document-type-options label:has(input:checked) { border-color: #2563eb; background: #eff6ff; }
+.meeting-dialog .document-type-options input { display: inline-block; width: 16px; min-width: 16px; height: 16px; margin: 0; padding: 0; accent-color: #2563eb; }
 .sidebar-order .tab-btn[hidden], .receipt-department-filter[hidden] { display: none; }
 .receipt-department-filter { padding: 10px 8px; border-bottom: 1px solid var(--border-color); flex-shrink: 0; }
 .receipt-department-filter label { display: block; margin-bottom: 5px; color: #475569; font-size: 0.76rem; font-weight: 600; }

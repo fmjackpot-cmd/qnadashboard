@@ -1746,7 +1746,7 @@ function processPdfFile(file) {
   const reader = new FileReader();
   reader.onload = (ev) => {
     if (ev.target && ev.target.result) {
-      loadPdfBuffer(ev.target.result, file.name, false, document.getElementById('start-document-type')?.value || 'questions');
+      loadPdfBuffer(ev.target.result, file.name, false, currentDocumentType);
     }
   };
   reader.onerror = (err) => {

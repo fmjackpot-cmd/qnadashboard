@@ -316,7 +316,7 @@
       showDocument: descriptor => root.DashboardMeeting.showDocument(descriptor),
       uploadFile: async (room, file, key) => {
         const url = new URL(root.DASHBOARD_CONFIG?.meetingDocumentEndpoint || '/.netlify/functions/meeting-document', location.href);
-        return uploadPdfParts({ room, file, key, endpoint: url, documentType: el('meeting-document-type')?.value || 'questions',
+        return uploadPdfParts({ room, file, key, endpoint: url, documentType: el('meeting-type-receipt').checked ? 'receipt' : 'questions',
           onProgress: message => session.onStatus('uploading', message) });
       },
       subscribe: createAblySubscriber({ loadSdk, getToken: room => request(room, null, null, 'token') }),
@@ -372,7 +372,10 @@
     const openMeeting = (role, file = null) => {
       setRole(role);
       const type = root.DashboardMeeting.getDocument().documentType;
-      el('meeting-document-type').value = type || el('start-document-type').value || 'questions';
+      if (type) {
+        el('meeting-type-receipt').checked = type === 'receipt';
+        el('meeting-type-questions').checked = type !== 'receipt';
+      }
       pendingStartFile = file;
       el('meeting-pdf').value = '';
       el('meeting-pdf-hint').textContent = file ? `선택한 자료: ${file.name} · 관리자 인증 후 업로드합니다.`

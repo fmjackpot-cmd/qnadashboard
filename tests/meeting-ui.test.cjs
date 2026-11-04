@@ -48,9 +48,11 @@ test('meeting form authenticates, clears the key field, and shares a viewer URL 
   assert.equal(elements.get('meeting-viewer').hidden, false);
   assert.equal(elements.get('meeting-room').value, '');
   elements.get('start-admin').onclick();
-  elements.get('start-document-type').value = 'receipt';
+  assert.equal(elements.has('start-document-type'), false);
+  elements.get('meeting-type-receipt').checked = true;
+  elements.get('meeting-type-questions').checked = false;
   elements.get('start-admin').onclick();
-  assert.equal(elements.get('meeting-document-type').value, 'receipt');
+  assert.equal(elements.get('meeting-type-receipt').checked, true);
   assert.equal(elements.get('meeting-admin-fields').hidden, false);
   assert.equal(elements.get('meeting-admin-fields').disabled, false);
   assert.equal(elements.get('meeting-viewer').hidden, true);
@@ -63,6 +65,7 @@ test('meeting form authenticates, clears the key field, and shares a viewer URL 
   assert.match(elements.get('meeting-open').title, /관리자 제어 중/);
   assert.equal(writes[0].body.action, 'authenticate');
   assert.equal(writes[1].body, pdf);
+  assert.equal(writes[1].headers['X-Document-Type'], 'receipt');
   assert.equal(writes[2].body.action, 'set-document');
   assert.equal(writes[2].body.questionId, 3);
   listeners['dashboard-document-ready']();
