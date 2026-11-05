@@ -2165,6 +2165,7 @@ function openMobileSidebar() {
   const backdrop = document.getElementById('sidebar-backdrop');
   if (sidebar) sidebar.classList.add('mobile-open');
   if (backdrop) backdrop.classList.add('active');
+  document.getElementById('btn-toggle-sidebar')?.setAttribute('aria-expanded', 'true');
 }
 
 function closeMobileSidebar() {
@@ -2172,6 +2173,7 @@ function closeMobileSidebar() {
   const backdrop = document.getElementById('sidebar-backdrop');
   if (sidebar) sidebar.classList.remove('mobile-open');
   if (backdrop) backdrop.classList.remove('active');
+  document.getElementById('btn-toggle-sidebar')?.setAttribute('aria-expanded', 'false');
 }
 
 function toggleMobileSidebar() {

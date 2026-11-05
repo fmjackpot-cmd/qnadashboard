@@ -811,19 +811,35 @@ main.viewer-container {
   }
 
   .viewer-toolbar {
-    height: 48px;
-    padding: 0 4px;
-    gap: 3px;
+    height: auto;
+    min-height: 88px;
+    padding: 4px max(4px, env(safe-area-inset-right)) 4px max(4px, env(safe-area-inset-left));
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .viewer-toolbar > .tool-group {
+    flex: 1 0 100%;
+    width: 100%;
+  }
+
+  .viewer-toolbar > .right-group {
+    justify-content: flex-end;
   }
 
   .btn-tool {
     padding: 4px 6px;
     font-size: 0.72rem;
+    min-height: 38px;
   }
 
-  .btn-text-responsive,
-  .btn-text-mobile-menu {
+  .btn-text-responsive {
     display: none !important;
+  }
+
+  .btn-text-mobile-menu,
+  #btn-show-toc .btn-text-responsive {
+    display: inline !important;
   }
 
   .badge-q-num-pill {
