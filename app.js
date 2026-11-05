@@ -243,7 +243,7 @@ async function extractAllPagesText(pdfDoc) {
       pages.push({
         pageNum: p,
         text: str,
-        layout: (currentDocumentType === 'receipt' && detectedPrintedPage === null) || (/소\s*관\s*부\s*서/.test(str) && /쪽\s*번\s*호/.test(str))
+        layout: (currentDocumentType === 'receipt' && detectedPrintedPage === null) || (/소\s*관\s*부\s*서/.test(str) && /쪽\s*번\s*호/.test(str)) || isGroupedAuditToc(str)
           ? items.filter(it => it.str?.trim()).map(it => ({ text: it.str, x: it.transform[4] / unscaled.width, y: it.transform[5] })) : [],
         footerText: footerRaw,
         printedPage: detectedPrintedPage
@@ -316,7 +316,8 @@ function analyzeDocumentStructure(pageTexts) {
     const qMatches = text.match(/[?？]|\b문항\s*\d+|\b질의\s*\d+/g) || [];
     
     // Page is considered TOC if it has TOC title OR has >= 3 questions in a single page
-    if (hasTocTitle || qMatches.length >= 3) {
+    const isAnswerPage = /[【\[]\s*\d+\s*[】\]][\s\S]*【\s*답\s*변\s*】/.test(text);
+    if (isGroupedAuditToc(text) || (!isAnswerPage && (hasTocTitle || qMatches.length >= 3))) {
       detectedTocPages.push(pageObj.pageNum);
     }
   }
@@ -732,6 +733,62 @@ function parseOfficerToc(pageTexts, structure) {
 
 // Audit TOCs use numbered bullet rows and explicit category/team/page columns.
 // A title may contain several questions, or no question mark at all.
+function isGroupedAuditToc(text) {
+  return /구\s*분\s+순\s+제\s*목\s+구\s*분\s+쪽\s*수/.test(text || '');
+}
+
+// Keep the left merged cells separate from title/status/page columns. The body
+// bracket sequence is authoritative when TOC page numbers have become stale.
+function parseGroupedAuditToc(pageTexts, structure) {
+  const items = [];
+  const targets = pageTexts.filter(p => (structure.tocPages || []).includes(p.pageNum) && isGroupedAuditToc(p.text));
+  if (!targets.length) return [];
+  for (const page of targets) {
+    const layout = page.layout || [];
+    const numberHeader = layout.find(it => it.text.trim() === '순');
+    if (!numberHeader) throw new Error('목차 표의 위치 정보를 읽지 못했습니다. PDF를 다시 열어주세요.');
+    const headers = layout.filter(it => Math.abs(it.y - numberHeader.y) < 3).sort((a, b) => a.x - b.x);
+    const statusHeader = headers.filter(it => it.text.replace(/\s/g, '') === '구분').at(-1);
+    const pageHeader = headers.find(it => it.text.replace(/\s/g, '') === '쪽수');
+    const bookHeader = headers.find(it => it.text.replace(/\s/g, '') === '책자');
+    if (!statusHeader || !pageHeader) throw new Error('목차 표의 구분·쪽수 열을 확인하지 못했습니다.');
+    const rows = layout.filter(it => Math.abs(it.x - numberHeader.x) < 0.02 && /^\d+$/.test(it.text.trim()) && it.y < numberHeader.y - 3)
+      .sort((a, b) => b.y - a.y);
+    if (!rows.length) throw new Error('목차 표의 문항 번호를 확인하지 못했습니다.');
+    const cellText = cells => cells.sort((a, b) => b.y - a.y || a.x - b.x).map(it => it.text).join(' ').replace(/\s+/g, ' ').trim();
+    let category = '';
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i], categoryNumber = Number(row.text);
+      const top = i ? (rows[i - 1].y + row.y) / 2 : numberHeader.y - 3;
+      const bottom = i + 1 < rows.length ? (row.y + rows[i + 1].y) / 2 : row.y - 18;
+      if (categoryNumber === 1) {
+        let end = i + 1;
+        while (end < rows.length && Number(rows[end].text) !== 1) end++;
+        const groupBottom = end < rows.length ? (rows[end - 1].y + rows[end].y) / 2 : rows[end - 1].y - 18;
+        category = cellText(layout.filter(it => it.x < numberHeader.x - 0.025 && it.y < top && it.y > groupBottom)).replace(/\s/g, '');
+      } else if (!items.length || categoryNumber !== items.at(-1).categoryNumber + 1) {
+        throw new Error('카테고리별 목차 번호가 연속되지 않습니다. 원본을 확인해주세요.');
+      }
+      const cells = layout.filter(it => it.y < top && it.y > bottom);
+      const title = cellText(cells.filter(it => it.x >= numberHeader.x + 0.03 && it.x < statusHeader.x - 0.01)).replace(/^[○●■▶]\s*/, '');
+      const officer = cellText(cells.filter(it => it.x >= statusHeader.x - 0.01 && it.x < pageHeader.x - 0.01));
+      const docPage = cellText(cells.filter(it => it.x >= pageHeader.x - 0.01 && it.x < (bookHeader ? bookHeader.x - 0.01 : 1)));
+      if (!category || !title) throw new Error('목차의 카테고리 또는 제목을 확인하지 못했습니다.');
+      items.push({ id: items.length + 1, categoryNumber, title, category, team: '', officer,
+        docPage: /^\d+$/.test(docPage) ? docPage : '', tocPage: page.pageNum,
+        settle: '', explain: '', attach: '', opinion: '' });
+    }
+  }
+  const body = pageTexts.filter(p => !(structure.tocPages || []).includes(p.pageNum)).map(page => {
+    const heading = /[【\[]\s*(\d+)\s*[】\]]\s*([\s\S]*?)<[^>]+>\s*【\s*답\s*변\s*】/.exec(page.text.slice(0, 900));
+    return heading ? { pageNum: page.pageNum, number: Number(heading[1]) } : null;
+  }).filter(Boolean);
+  if (body.length !== items.length || items.some((it, i) => it.categoryNumber !== body[i]?.number)) {
+    throw new Error(`목차 ${items.length}건과 본문의 대괄호 문항 번호가 일치하지 않습니다. 원본을 확인해주세요.`);
+  }
+  return items.map((item, i) => ({ ...item, startPdfPage: body[i].pageNum }));
+}
+
 function parseAuditToc(pageTexts, structure) {
   const items = [];
   for (const page of pageTexts.filter(p => (structure.tocPages || []).includes(p.pageNum))) {
@@ -759,6 +816,8 @@ function parseAuditToc(pageTexts, structure) {
 }
 
 function parseQuestionsHeuristic(pageTexts, structure) {
+  const groupedItems = parseGroupedAuditToc(pageTexts, structure);
+  if (groupedItems.length) return groupedItems;
   const auditItems = parseAuditToc(pageTexts, structure);
   if (auditItems.length) return auditItems;
   const officerItems = parseOfficerToc(pageTexts, structure);
@@ -910,7 +969,8 @@ function getSidebarItems() {
 }
 
 function sidebarButtonLabel(item) {
-  return currentDocumentType === 'receipt' ? receiptStartPage(item) : Number(item.id);
+  if (currentDocumentType === 'receipt') return receiptStartPage(item);
+  return currentListOrder === 'category' && item.categoryNumber ? item.categoryNumber : Number(item.id);
 }
 
 function parseReceiptToc(pageTexts) {
@@ -993,7 +1053,8 @@ async function parseUploadedPdf(pdfDoc, fileName) {
   tocPages = structure.tocPages;
 
   // Use validated rows directly for this explicit layout, with or without an AI key.
-  let rawParsedItems = parseAuditToc(pageTexts, structure);
+  let rawParsedItems = parseGroupedAuditToc(pageTexts, structure);
+  if (!rawParsedItems.length) rawParsedItems = parseAuditToc(pageTexts, structure);
   if (!rawParsedItems.length) rawParsedItems = parseOfficerToc(pageTexts, structure);
 
   // 3. AI Parsing with Multi-Model Fallback (3.5-flash-lite -> 3.5-flash -> flash-latest)
@@ -1018,10 +1079,11 @@ async function parseUploadedPdf(pdfDoc, fileName) {
 제공된 텍스트는 PDF 문서의 앞부분(목차 및 관련 페이지) 텍스트입니다.
 
 [중요 파싱 규칙]:
-1. id 필드: 문항 순번 (1부터 시작하는 정수 1, 2, 3...)을 반드시 부여하세요.
+1. id 필드: 전체 질의의 고유 순번 (1부터 시작하는 정수 1, 2, 3...)을 반드시 부여하세요. 카테고리별 번호가 다시 시작해도 id는 중복되면 안 됩니다.
+   categoryNumber 필드: 카테고리별 별도 번호가 있으면 본문 【번호】 또는 [번호]와 대응하는 목차의 원래 번호를 정수로 보존하고, 없으면 null로 두세요. 번호 뒤의 다른 요구자료 번호와 혼동하지 마세요.
 2. title 필드: 앞에 붙은 순번(1, 2...), 기호(○, -, ■), 의원명(김남국 의원 등), 팀명 등을 모두 제외하고 오직 순수한 '질의 제목 전문'만 넣으세요.
    (예: "초·중·고등학교의 과밀학급 및 과대학교 현황과 대책은?")
-3. category 필드: 팀명(예: "학생배치팀", "조직관리팀", "법무팀" 등)으로 그룹화하세요.
+3. category 필드: 목차 표 제일 왼쪽 열의 부서명·주제명(세로 병합 셀 포함)을 우선 사용하세요. 왼쪽에 분류가 없으면 팀명으로 그룹화하세요. 현안·공통·요구자료 등의 질의 유형을 부서·주제 대신 사용하지 마세요.
 4. team 필드: 해당 팀명을 넣으세요.
 5. officer 필드: 구분/의원명(예: "문정복 의원", "김남국 의원", "언론", "현안" 등)이 있으면 넣고 없으면 빈 문자열 ""로 두세요.
 6. docPage 필드: 목차 표의 '쪽수' 컬럼에 명시된 시작 쪽수(예: "1", "6", "8", "9", "11" 등 숫자 문자열)를 추출하세요. 쪽수가 없으면 빈 문자열 ""로 두세요.
@@ -1125,6 +1187,7 @@ ${contextText}
 
       return {
         id: validId,
+        categoryNumber: Number(item.categoryNumber) || null,
         team: (item.team || item.department || "").trim(),
         category: (item.category || item.team || "일반").trim(),
         officer: (item.officer || item.author || "").trim(),
@@ -1242,7 +1305,7 @@ function renderQuestionList() {
         btn.innerText = sidebarButtonLabel(item);
         const officerStr = item.officer ? `\n담당: ${item.officer}` : '';
         const pageStr = item.docPage ? `문서 ${item.docPage}쪽` : `PDF ${item.startPdfPage}p`;
-        const tooltipStr = `[문항 ${id}] ${pageStr} (PDF ${item.startPdfPage}p) ${item.title}${officerStr}`;
+        const tooltipStr = `[${grouped ? catName + ' ' : ''}문항 ${sidebarButtonLabel(item)}] ${pageStr} (PDF ${item.startPdfPage}p) ${item.title}${officerStr}`;
         btn.title = tooltipStr;
 
         btn.addEventListener('click', () => {
@@ -1368,6 +1431,9 @@ function setupSidebarTabs() {
         candidate.setAttribute('aria-pressed', String(value === order));
       });
       renderQuestionList();
+      const selected = currentItems.find(item => Number(item.id) === Number(selectedQuestionId));
+      const pill = document.getElementById('badge-q-num-pill');
+      if (selected && pill && currentViewMode === 'question') pill.innerText = `${sidebarButtonLabel(selected)}`;
     };
   });
 
@@ -1493,7 +1559,7 @@ async function renderCurrentView(autoFit = true) {
   // Update Question Number Pill Badge
   const qNumPill = document.getElementById('badge-q-num-pill');
   if (qNumPill) {
-    qNumPill.innerText = `${qId}`;
+    qNumPill.innerText = `${sidebarButtonLabel(q)}`;
     qNumPill.classList.remove('badge-toc-mode');
   }
 

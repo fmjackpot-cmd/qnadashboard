@@ -1,0 +1,39 @@
+// Optional private-document check: node tests/grouped-audit-integration.cjs pdf.cjs pdf.worker.cjs source.pdf
+const fs = require('node:fs');
+const vm = require('node:vm');
+const path = require('node:path');
+const assert = require('node:assert/strict');
+const pdfjs = require(path.resolve(process.argv[2]));
+pdfjs.GlobalWorkerOptions.workerSrc = path.resolve(process.argv[3]);
+(async () => {
+  const ctx = { window: {}, console: { log() {}, warn() {} }, document: { getElementById: () => null }, setTimeout,
+    fetch: () => { throw new Error('Explicit TOC must not call AI'); } };
+  vm.createContext(ctx);
+  const source = fs.readFileSync('app.js', 'utf8');
+  vm.runInContext(source.slice(0, source.indexOf('// 4. SIDEBAR RENDERING')), ctx);
+  vm.runInContext("geminiApiKey = 'must-not-call-ai'", ctx);
+  const doc = await pdfjs.getDocument({ data: new Uint8Array(fs.readFileSync(process.argv[4])) }).promise;
+  await ctx.parseUploadedPdf(doc, 'grouped-audit.pdf');
+  const rows = vm.runInContext('currentItems', ctx);
+  assert.equal(rows.length, 49);
+  const starts = [3,5,7,10,13,15,18,20,27,30,32,34,35,37,39,40,42,45,50,52,61,62,63,65,66,68,69,71,73,76,77,78,82,84,86,87,90,91,92,95,103,104,107,108,110,112,117,119,122];
+  const groups = [['학생배치',8],['적정규모학교육성',12],['통학버스',12],['조직관리팀',7],['법무팀',10]];
+  assert.deepEqual(Array.from(rows, r => r.category), groups.flatMap(([name,count]) => Array(count).fill(name)));
+  assert.deepEqual(Array.from(rows, r => r.categoryNumber), groups.flatMap(([,count]) => Array.from({length:count},(_,i)=>i+1)));
+  assert.deepEqual(Array.from(vm.runInContext('tocPages', ctx)), [1,2]);
+  for (let i=0;i<rows.length;i++) {
+    assert.equal(rows[i].id, i+1);
+    assert.equal(rows[i].startPdfPage, starts[i]);
+    assert.equal(rows[i].endPdfPage, i+1 < rows.length ? starts[i+1]-1 : doc.numPages);
+    const page = await doc.getPage(starts[i]);
+    const text = (await page.getTextContent()).items.map(it=>it.str).join(' ');
+    assert.equal(Number(text.match(/【\s*(\d+)\s*】/)[1]), rows[i].categoryNumber);
+  }
+  assert.match(rows[3].title, /제천산업고/);
+  assert.match(rows[4].title, /동성고/);
+  vm.runInContext("currentListOrder = 'number'",ctx);
+  assert.deepEqual(Array.from(rows,ctx.sidebarButtonLabel), Array.from({length:49},(_,i)=>i+1));
+  vm.runInContext("currentListOrder = 'category'",ctx);
+  assert.deepEqual(Array.from(rows,ctx.sidebarButtonLabel), Array.from(rows,r=>r.categoryNumber));
+  console.log('PASS: 49 questions, 5 left-column categories, all bracket numbers, body ranges and both numbering modes; no AI call');
+})().catch(error=> { console.error(error); process.exitCode=1; });
