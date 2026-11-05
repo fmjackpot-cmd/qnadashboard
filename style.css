@@ -66,6 +66,7 @@ body {
   background-color: #1e293b;
   color: var(--text-main);
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -76,8 +77,8 @@ body {
 .main-container {
   display: flex;
   flex: 1;
-  height: 100vh;
-  height: 100dvh;
+  min-height: 0;
+  height: 100%;
   position: relative;
   overflow: hidden;
 }
@@ -242,6 +243,7 @@ aside.sidebar.collapsed {
 /* Viewer Sticky Toolbar - Dynamically Scales with Window/Container Size */
 main.viewer-container {
   flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   background: #475569;
@@ -484,6 +486,7 @@ main.viewer-container {
 /* PDF Viewport (Compacted Margins for Maximum Content Visibility) */
 .pdf-viewport {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: auto;
   display: flex;
@@ -760,6 +763,12 @@ main.viewer-container {
 
 /* Mobile Screen Optimization (< 640px) - Full-width Viewer + Drawer Sidebar */
 @media (max-width: 640px) {
+  /* Reserve the notch/home-indicator area inside Safari's visible height. */
+  body {
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
   .main-container {
     position: relative;
     width: 100vw;
@@ -771,8 +780,9 @@ main.viewer-container {
     top: 0;
     left: 0;
     bottom: 0;
-    height: 100%;
+    height: 100vh;
     height: 100dvh;
+    padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
     width: 86% !important;
     max-width: 320px;
     min-width: 0 !important;
