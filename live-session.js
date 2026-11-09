@@ -83,6 +83,19 @@
       this.onStatus('offline');
     }
 
+    async loadSharedDocument() {
+      if (!this.active || this.role !== 'admin') throw new Error('관리자로 회의에 연결해주세요.');
+      const generation = this.generation;
+      const { state } = await this.request(this.room);
+      if (generation !== this.generation) return;
+      if (!state?.document) throw new Error('회의 자료가 없습니다. 첫 관리자는 PDF를 선택해 업로드해주세요.');
+      await this.showTarget(state);
+      if (generation !== this.generation) return;
+      this.sharedDocument = state.document;
+      this.lastRevision = state.revision;
+      this.onStatus('admin');
+    }
+
     async sync() {
       if (!this.active || this.role !== 'viewer') return;
       const generation = this.generation;
@@ -346,11 +359,13 @@
       return url.href;
     };
     const join = async (room, key, file) => {
-      if (key && !file) throw new Error('회의 PDF를 선택하거나 PDF를 먼저 열어주세요.');
       await session.join(room, key);
       if (!session.active) return;
       if (key) {
-        try { await session.shareFile(file); }
+        try {
+          if (file) await session.shareFile(file);
+          else await session.loadSharedDocument();
+        }
         catch (error) { session.leave(); throw error; }
       }
       el('meeting-link').value = shareLink(room);
@@ -379,7 +394,7 @@
       pendingStartFile = file;
       el('meeting-pdf').value = '';
       el('meeting-pdf-hint').textContent = file ? `선택한 자료: ${file.name} · 관리자 인증 후 업로드합니다.`
-        : 'PDF를 선택하면 업로드 후 회의가 시작됩니다. 이미 문서가 열려 있다면 해당 PDF를 사용할 수 있습니다.';
+        : '첫 관리자는 PDF를 선택하세요. 추가 관리자는 같은 회의 코드와 인증키를 입력하면 기존 자료로 접속합니다.';
       el('meeting-error').textContent = '';
       el('meeting-room').value = session.room || new URL(location.href).searchParams.get('room') || (roleMode === 'admin' ? 'meeting' : '');
       dialog.showModal();
@@ -401,7 +416,7 @@
       const buttons = form.querySelectorAll('button[type="submit"]');
       buttons.forEach(button => { button.disabled = true; });
       try {
-        const file = admin ? el('meeting-pdf').files?.[0] || pendingStartFile || root.DashboardMeeting.getFile() : null;
+        const file = admin ? el('meeting-pdf').files?.[0] || pendingStartFile : null;
         await join(room, key, file);
         el('meeting-pdf').value = '';
         pendingStartFile = null;

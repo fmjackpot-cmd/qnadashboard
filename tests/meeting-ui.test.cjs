@@ -21,6 +21,7 @@ test('meeting form authenticates, clears the key field, and shares a viewer URL 
   const pdf = new File(['%PDF-1.7\nfixture'], 'meeting.pdf', { type: 'application/pdf' });
   const descriptor = { id: 'a'.repeat(64), fileId: '12345678-1234-1234-1234-123456789abc', name: 'meeting.pdf', url: '/.netlify/functions/meeting-document?room=audit-2026&file=12345678-1234-1234-1234-123456789abc' };
   let copied;
+  const loaded = [];
   const context = {
     document: doc, location, URL, AbortSignal,
     history: { replaceState: (_, __, url) => { location.href = String(url); } },
@@ -28,7 +29,7 @@ test('meeting form authenticates, clears the key field, and shares a viewer URL 
     setTimeout: () => 1, clearTimeout() {},
     addEventListener: (name, fn) => { listeners[name] = fn; },
     DASHBOARD_CONFIG: { meetingEndpoint: '/.netlify/functions/meeting' },
-    DashboardMeeting: { getDocument: () => ({ ready: true, hosted: true, id: 'a'.repeat(64) }), getTarget: () => ({ mode: 'question', questionId: 3 }), getFile: () => pdf, showDocument: async () => {} },
+    DashboardMeeting: { getDocument: () => ({ ready: true, hosted: true, id: 'a'.repeat(64) }), getTarget: () => ({ mode: 'question', questionId: 3 }), getFile: () => pdf, showDocument: async () => {}, showTarget: async state => loaded.push(state) },
     fetch: async (url, options) => {
       if (options.headers['Content-Type'] === 'application/pdf') {
         writes.push({ url: String(url), body: options.body, headers: options.headers });
@@ -36,7 +37,7 @@ test('meeting form authenticates, clears the key field, and shares a viewer URL 
       }
       const body = options.body ? JSON.parse(options.body) : null;
       writes.push({ url: String(url), body, headers: options.headers });
-      return { ok: true, json: async () => body?.action === 'authenticate' ? { authenticated: true } : { state: { revision: 'one' } } };
+      return { ok: true, json: async () => body?.action === 'authenticate' ? { authenticated: true } : { state: { revision: 'one', document: descriptor, documentId: descriptor.id, mode: 'question', questionId: 3 } } };
     }
   };
   context.window = context;
@@ -58,6 +59,7 @@ test('meeting form authenticates, clears the key field, and shares a viewer URL 
   assert.equal(elements.get('meeting-viewer').hidden, true);
   elements.get('meeting-room').value = 'audit-2026';
   elements.get('meeting-key').value = 'test-only-key-never-share-this';
+  elements.get('meeting-pdf').files = [pdf];
   await elements.get('meeting-form').onsubmit({ preventDefault() {}, submitter: { id: 'meeting-admin' } });
   assert.equal(elements.get('meeting-key').value, '');
   assert.equal(elements.get('meeting-send').hidden, false);
@@ -78,6 +80,18 @@ test('meeting form authenticates, clears the key field, and shares a viewer URL 
   assert.equal(elements.get('meeting-send').hidden, true);
   assert.equal(elements.get('meeting-open').dataset.state, 'offline');
   assert.ok(!location.href.includes('room='));
+  elements.get('start-admin').onclick();
+  elements.get('meeting-room').value = 'audit-2026';
+  elements.get('meeting-key').value = 'test-only-key-never-share-this';
+  elements.get('meeting-pdf').files = [];
+  const before = writes.length;
+  await elements.get('meeting-form').onsubmit({ preventDefault() {} });
+  assert.equal(writes.length, before + 2, 'additional admin only authenticates and reads the shared state');
+  assert.equal(writes[before].body.action, 'authenticate');
+  assert.equal(writes[before + 1].body, null);
+  assert.equal(loaded.length, 1);
+  assert.equal(loaded[0].document.fileId, descriptor.fileId);
+  assert.equal(elements.get('meeting-open').dataset.state, 'admin');
 });
 
 function appContext() {

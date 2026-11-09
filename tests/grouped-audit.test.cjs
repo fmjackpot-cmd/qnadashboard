@@ -49,6 +49,21 @@ test('rejects incomplete bracket sequences instead of silently returning a parti
   assert.throws(()=>ctx.parseGroupedAuditToc(pages,{tocPages:[1]}),/대괄호 문항 번호가 일치하지/);
 });
 
+test('carries a category across TOC pages and separates centered long status labels',()=>{
+  const {ctx,pages}=fixture();
+  const original=pages[0];
+  const first={...original,layout:original.layout.filter(c=>c.y>=720 || c.x<.125 && c.y>=680)};
+  first.layout=first.layout.map(c=>c.text==='학생'?{...c,y:714}:c.text==='배치'?{...c,y:706}:c);
+  const second={...original,pageNum:2,layout:original.layout.filter(c=>c.y!==720 && !(c.x<.125 && c.y>=680))};
+  second.layout.find(c=>c.text==='요구자료' && c.y===660).x=.665;
+  const input=[first,second,...pages.slice(1).map(p=>({...p,pageNum:p.pageNum+1}))];
+  const rows=ctx.parseGroupedAuditToc(input,{tocPages:[1,2]});
+  assert.deepEqual(Array.from(rows,r=>r.category),['학생배치','학생배치','법무팀']);
+  assert.deepEqual(Array.from(rows,r=>r.startPdfPage),[3,5,6]);
+  assert.equal(rows[1].title,'집행률이 50% 이하인 사업 사유는?');
+  assert.equal(rows[1].officer,'요구자료');
+});
+
 test('grid and title lists keep distinct click targets when local category numbers repeat',()=>{
   function element() {
     return {children:[],dataset:{},classList:{add(){},remove(){},toggle(){}},

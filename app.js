@@ -743,6 +743,7 @@ function parseGroupedAuditToc(pageTexts, structure) {
   const items = [];
   const targets = pageTexts.filter(p => (structure.tocPages || []).includes(p.pageNum) && isGroupedAuditToc(p.text));
   if (!targets.length) return [];
+  let category = '';
   for (const page of targets) {
     const layout = page.layout || [];
     const numberHeader = layout.find(it => it.text.trim() === '순');
@@ -756,7 +757,8 @@ function parseGroupedAuditToc(pageTexts, structure) {
       .sort((a, b) => b.y - a.y);
     if (!rows.length) throw new Error('목차 표의 문항 번호를 확인하지 못했습니다.');
     const cellText = cells => cells.sort((a, b) => b.y - a.y || a.x - b.x).map(it => it.text).join(' ').replace(/\s+/g, ' ').trim();
-    let category = '';
+    // Status cells are centered: long labels and 의원 names start left of the header.
+    const statusLeft = statusHeader.x - 0.04;
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i], categoryNumber = Number(row.text);
       const top = i ? (rows[i - 1].y + row.y) / 2 : numberHeader.y - 3;
@@ -770,8 +772,8 @@ function parseGroupedAuditToc(pageTexts, structure) {
         throw new Error('카테고리별 목차 번호가 연속되지 않습니다. 원본을 확인해주세요.');
       }
       const cells = layout.filter(it => it.y < top && it.y > bottom);
-      const title = cellText(cells.filter(it => it.x >= numberHeader.x + 0.03 && it.x < statusHeader.x - 0.01)).replace(/^[○●■▶]\s*/, '');
-      const officer = cellText(cells.filter(it => it.x >= statusHeader.x - 0.01 && it.x < pageHeader.x - 0.01));
+      const title = cellText(cells.filter(it => it.x >= numberHeader.x + 0.03 && it.x < statusLeft)).replace(/^[○●■▶]\s*/, '');
+      const officer = cellText(cells.filter(it => it.x >= statusLeft && it.x < pageHeader.x - 0.01));
       const docPage = cellText(cells.filter(it => it.x >= pageHeader.x - 0.01 && it.x < (bookHeader ? bookHeader.x - 0.01 : 1)));
       if (!category || !title) throw new Error('목차의 카테고리 또는 제목을 확인하지 못했습니다.');
       items.push({ id: items.length + 1, categoryNumber, title, category, team: '', officer,

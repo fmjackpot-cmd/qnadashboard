@@ -142,6 +142,41 @@ test('admin uploads then downloads the exact object before publishing; participa
   assert.equal(late.lastRevision, f.states.get('room').revision);
 });
 
+test('two admins take turns controlling one participant without uploading the shared PDF again', async () => {
+  const f = await fixture();
+  const makeAdmin = () => {
+    let doc = { ready: false };
+    return new MeetingSession({ request: f.request, uploadFile: f.uploadFile,
+      getDocument: () => doc, getTarget: () => ({ mode: 'question', questionId: 1 }),
+      showDocument: async descriptor => { await f.download(descriptor); doc = { ready: true, hosted: true, id: descriptor.id, shared: descriptor }; },
+      showTarget: async state => { await f.download(state.document); doc = { ready: true, hosted: true, id: state.documentId, shared: state.document }; }
+    });
+  };
+  const first = makeAdmin(), second = makeAdmin(), shown = [];
+  const viewer = new MeetingSession({ request: f.request, getDocument: () => ({ ready: false }),
+    subscribe: async (_, handlers) => { f.subscribers.add(handlers.onState); return () => f.subscribers.delete(handlers.onState); },
+    showTarget: async state => shown.push(state.questionId) });
+  await first.join('room', adminKey);
+  await first.shareFile(pdf('shared'));
+  await viewer.join('room');
+  const publishedBeforeJoin = f.published.length;
+  await second.join('room', adminKey);
+  await second.loadSharedDocument();
+  assert.equal(f.published.length, publishedBeforeJoin, 'joining cannot change the participant screen');
+  assert.equal(f.order.filter(x=>x==='upload').length, 1);
+  await first.navigate({ mode: 'question', questionId: 3 });
+  await viewer.applyQueue;
+  await second.navigate({ mode: 'question', questionId: 7 });
+  await viewer.applyQueue;
+  await first.navigate({ mode: 'question', questionId: 2 });
+  await viewer.applyQueue;
+  assert.deepEqual(shown, [1,3,7,2]);
+  assert.equal(f.order.filter(x=>x==='commit').length, 1, 'taking turns keeps the existing document');
+  await second.join('empty', adminKey);
+  await assert.rejects(second.loadSharedDocument(), /첫 관리자는 PDF/);
+  viewer.leave(); first.leave(); second.leave();
+});
+
 test('upload failure or parse failure leaves the active meeting document unchanged', async () => {
   const f = await fixture();
   let current = null;
