@@ -54,8 +54,8 @@
       </div>
 
       <div class="sidebar-tabs sidebar-order" role="group" aria-label="질의 정렬 방식">
-        <button class="tab-btn" id="btn-order-category" aria-pressed="false" title="카테고리별로 모아 보기">카테고리순</button>
-        <button class="tab-btn active" id="btn-order-number" aria-pressed="true" title="전체 문항을 번호 오름차순으로 보기">번호순</button>
+        <button class="tab-btn active" id="btn-order-category" aria-pressed="true" title="카테고리별로 모아 보기">카테고리순</button>
+        <button class="tab-btn" id="btn-order-number" aria-pressed="false" title="전체 문항을 번호 오름차순으로 보기">번호순</button>
       </div>
 
       <div class="receipt-department-filter" id="receipt-department-filter" hidden>
@@ -258,7 +258,7 @@
     </div>
     <form id="meeting-form">
       <label for="meeting-room">회의 코드</label>
-      <input id="meeting-room" name="room" maxlength="64" pattern="[a-zA-Z0-9_\-]{1,64}" required autocomplete="off" placeholder="예: audit-2026">
+      <input id="meeting-room" name="room" maxlength="64" pattern="[a-zA-Z0-9_\-]{1,64}" required autocomplete="off" placeholder="cbe">
       <button type="submit" id="meeting-viewer">회의 참여하기</button>
       <fieldset id="meeting-admin-fields" hidden disabled>
       <label for="meeting-key">관리자 인증키</label>
@@ -285,7 +285,7 @@
     <button type="button" id="meeting-leave" hidden>회의 연결 해제</button>
   </dialog>
   <script src="dashboard-config.js?v=20261103-empty-start" defer></script>
-  <script src="app.js?v=20261105-mobile-viewport" defer></script>
-  <script src="live-session.js?v=20261104-mode-radios" defer></script>
+  <script src="app.js?v=20261110-category-default" defer></script>
+  <script src="live-session.js?v=20261110-cbe-default" defer></script>
 </body>
 </html>

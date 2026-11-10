@@ -13,7 +13,7 @@ let selectedQuestionId = null;
 let currentQuestion = null;
 let currentViewMode = 'question'; // 'question' | 'toc'
 let currentListViewMode = 'grid'; // 'grid' | 'list'
-let currentListOrder = 'number'; // 'category' | 'number'
+let currentListOrder = 'category'; // 'category' | 'number'
 let geminiApiKey = "";
 let tocPages = []; // Detected TOC pages
 let windowDragCounter = 0;
@@ -1748,7 +1748,7 @@ async function loadPdfBufferNow(buffer, fileName, hosted = false, documentType =
   ++viewRenderRevision;
   currentDocumentType = documentType === 'receipt' ? 'receipt' : 'questions';
   currentDepartment = '';
-  currentListOrder = 'number';
+  currentListOrder = 'category';
   meetingDocument = { ready: false, hosted, id: null, documentType: currentDocumentType };
   currentPdfFileName = fileName || "결산예상질의_답변서.pdf";
 

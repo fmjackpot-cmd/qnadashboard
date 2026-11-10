@@ -396,7 +396,7 @@
       el('meeting-pdf-hint').textContent = file ? `선택한 자료: ${file.name} · 관리자 인증 후 업로드합니다.`
         : '첫 관리자는 PDF를 선택하세요. 추가 관리자는 같은 회의 코드와 인증키를 입력하면 기존 자료로 접속합니다.';
       el('meeting-error').textContent = '';
-      el('meeting-room').value = session.room || new URL(location.href).searchParams.get('room') || (roleMode === 'admin' ? 'meeting' : '');
+      el('meeting-room').value = session.room || new URL(location.href).searchParams.get('room') || (roleMode === 'admin' ? 'cbe' : '');
       dialog.showModal();
       el('meeting-room').focus?.();
     };
