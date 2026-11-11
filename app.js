@@ -784,7 +784,9 @@ function parseGroupedAuditToc(pageTexts, structure) {
     }
   }
   const body = pageTexts.filter(p => !(structure.tocPages || []).includes(p.pageNum)).map(page => {
-    const heading = /[【\[]\s*(\d+)\s*[】\]]\s*([\s\S]*?)<[^>]+>\s*【\s*답\s*변\s*】/.exec(page.text.slice(0, 900));
+    // Some sections omit the <department/officer> line entirely. The numbered
+    // question followed by the answer marker still identifies its first page.
+    const heading = /[【\[]\s*(\d+)\s*[】\]]\s*([\s\S]*?)【\s*답\s*변\s*】/.exec(page.text.slice(0, 900));
     return heading ? { pageNum: page.pageNum, number: Number(heading[1]) } : null;
   }).filter(Boolean);
   if (body.length !== items.length || items.some((it, i) => it.categoryNumber !== body[i]?.number)) {

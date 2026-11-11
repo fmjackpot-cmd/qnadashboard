@@ -49,6 +49,21 @@ test('rejects incomplete bracket sequences instead of silently returning a parti
   assert.throws(()=>ctx.parseGroupedAuditToc(pages,{tocPages:[1]}),/대괄호 문항 번호가 일치하지/);
 });
 
+test('recognizes numbered answers without department or officer lines',()=>{
+  const {ctx,pages}=fixture();
+  pages[1].text='- 2 - ▣ 구분: 기타 【1】 첫 질문은? 【 답 변 】 답변 내용';
+  pages[3].text='- 4 - ▣ 구분: 기타 【2】 4. 집행률이 50% 이하인 사업 사유는 【답변】 답변 내용';
+  const rows=ctx.parseGroupedAuditToc(pages,{tocPages:[1]});
+  assert.deepEqual(Array.from(rows,r=>r.startPdfPage),[2,4,5]);
+  assert.deepEqual(Array.from(rows,r=>r.categoryNumber),[1,2,1]);
+});
+
+test('requires an answer marker even when a page contains a bracketed number',()=>{
+  const {ctx,pages}=fixture();
+  pages[3].text='【2】 참고자료에 등장하는 번호이며 문항 시작이 아님';
+  assert.throws(()=>ctx.parseGroupedAuditToc(pages,{tocPages:[1]}),/대괄호 문항 번호가 일치하지/);
+});
+
 test('carries a category across TOC pages and separates centered long status labels',()=>{
   const {ctx,pages}=fixture();
   const original=pages[0];
