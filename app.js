@@ -8,7 +8,9 @@ let currentItems = [];
 let currentPdfDoc = null;
 let currentPdfBytes = null;
 let currentPdfFileName = "";
-let currentScale = 1.15;
+const DEFAULT_SCALE = 1.4;
+let currentScale = DEFAULT_SCALE;
+let zoomMode = 'manual';
 let selectedQuestionId = null;
 let currentQuestion = null;
 let currentViewMode = 'question'; // 'question' | 'toc'
@@ -1550,7 +1552,7 @@ async function renderCurrentView(autoFit = true) {
 
   renderQuestionList();
 
-  if (autoFit) {
+  if (autoFit && zoomMode === 'fit') {
     const scale = await calcFitScale(q.startPdfPage);
     if (revision !== viewRenderRevision) return;
     currentScale = scale;
@@ -1688,7 +1690,7 @@ async function openTocView(autoFit = true, broadcast = true) {
 
   // Calculate Fit Scale using first TOC page
   const firstTocPage = tocPages[0] || 1;
-  if (autoFit) {
+  if (autoFit && zoomMode === 'fit') {
     const scale = await calcFitScale(firstTocPage);
     if (revision !== viewRenderRevision) return;
     currentScale = scale;
@@ -1720,9 +1722,10 @@ async function openQuestion(questionId, autoFit = true, broadcast = true) {
 }
 
 function applyZoom(newScale) {
+  zoomMode = 'manual';
   currentScale = Math.max(0.6, Math.min(2.5, newScale));
   if (currentViewMode === 'toc') {
-    openTocView(false);
+    openTocView(false, false);
   } else {
     renderCurrentView(false);
   }
@@ -1958,6 +1961,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   if (btnZoomFit) {
     btnZoomFit.onclick = () => {
+      zoomMode = 'fit';
       if (currentViewMode === 'toc') {
         openTocView(true, false);
       } else {
@@ -2087,6 +2091,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // 7. Window Resize Auto Fit
   let windowResizeTimer;
   window.addEventListener('resize', () => {
+    updateSidebarToggle();
     clearTimeout(windowResizeTimer);
     windowResizeTimer = setTimeout(() => {
       if (currentViewMode === 'toc') {
@@ -2167,7 +2172,7 @@ function openMobileSidebar() {
   const backdrop = document.getElementById('sidebar-backdrop');
   if (sidebar) sidebar.classList.add('mobile-open');
   if (backdrop) backdrop.classList.add('active');
-  document.getElementById('btn-toggle-sidebar')?.setAttribute('aria-expanded', 'true');
+  updateSidebarToggle();
 }
 
 function closeMobileSidebar() {
@@ -2175,7 +2180,32 @@ function closeMobileSidebar() {
   const backdrop = document.getElementById('sidebar-backdrop');
   if (sidebar) sidebar.classList.remove('mobile-open');
   if (backdrop) backdrop.classList.remove('active');
-  document.getElementById('btn-toggle-sidebar')?.setAttribute('aria-expanded', 'false');
+  updateSidebarToggle();
+}
+
+function updateSidebarToggle() {
+  const sidebar = document.getElementById('sidebar');
+  const button = document.getElementById('btn-toggle-sidebar');
+  if (!sidebar || !button) return;
+  const mobile = window.innerWidth <= 640;
+  const expanded = mobile ? sidebar.classList.contains('mobile-open') : !sidebar.classList.contains('collapsed');
+  sidebar.inert = !expanded;
+  button.setAttribute('aria-expanded', String(expanded));
+  button.title = expanded ? '질의 목록 숨기기' : '질의 목록 보이기';
+  button.setAttribute('aria-label', button.title);
+  button.querySelector('.btn-text-mobile-menu').textContent = expanded ? '목록 숨기기' : '목록 보이기';
+  document.getElementById('sidebar-backdrop')?.classList.toggle('active', mobile && expanded);
+}
+
+function toggleSidebar() {
+  if (window.innerWidth <= 640) {
+    toggleMobileSidebar();
+  } else {
+    document.getElementById('sidebar')?.classList.toggle('collapsed');
+    updateSidebarToggle();
+    if (currentViewMode === 'toc') openTocView(true, false);
+    else renderCurrentView(true);
+  }
 }
 
 function toggleMobileSidebar() {
@@ -2221,7 +2251,8 @@ function setupMobileNavigation() {
   const btnPrev = document.getElementById('btn-prev-q');
   const btnNext = document.getElementById('btn-next-q');
 
-  if (btnToggle) btnToggle.onclick = toggleMobileSidebar;
+  if (btnToggle) btnToggle.onclick = toggleSidebar;
+  updateSidebarToggle();
   if (btnClose) btnClose.onclick = closeMobileSidebar;
   if (backdrop) backdrop.onclick = closeMobileSidebar;
 

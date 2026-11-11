@@ -97,11 +97,15 @@ aside.sidebar {
   container-type: inline-size;
 }
 
+@media (min-width: 641px) {
 aside.sidebar.collapsed {
+  display: none;
   width: 0 !important;
   min-width: 0 !important;
   overflow: hidden;
   border-right: none;
+}
+aside.sidebar.collapsed + .resizer { display: none; }
 }
 
 /* Question List Container (Fluid Zero-Scroll Layout with 0.3 Button-Height Gap) */
@@ -729,7 +733,7 @@ main.viewer-container {
 }
 
 .btn-mobile-toggle {
-  display: none;
+  display: inline-flex;
   background: #1e40af;
   border-color: #1d4ed8;
   color: #ffffff;

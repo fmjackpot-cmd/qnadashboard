@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { createHandler } from '../netlify/functions/meeting.mjs';
 import { createBroker } from '../netlify/lib/meeting-ably.mjs';
 import { createDocumentHandler, MAX_PDF_BYTES } from '../netlify/lib/meeting-documents.mjs';
@@ -92,6 +93,20 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     process.exitCode = 1;
   });
   server.listen(port, '127.0.0.1', () => {
+    const appBrowserArg = process.argv.indexOf('--app-browser');
+    if (appBrowserArg !== -1) {
+      const browser = process.argv[appBrowserArg + 1];
+      if (browser) {
+        const app = spawn(browser, [`--app=http://localhost:${port}`, '--window-size=1280,800'], {
+          detached: true, stdio: 'ignore', windowsHide: false
+        });
+        app.on('error', () => console.error('Could not open the app window. Open the local address manually.'));
+        app.on('exit', code => {
+          if (code) console.error('The browser could not start in app mode. Try installing the site as an app from the browser menu.');
+        });
+        app.unref();
+      }
+    }
     console.log(`Local dashboard: http://localhost:${port}`);
     console.log('Open this address in a normal window (admin) and a private window (viewer).');
     console.log('Keep this terminal open. Press Ctrl+C to stop. No deployment or Git push is performed.');
