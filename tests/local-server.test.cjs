@@ -28,7 +28,11 @@ test('local launcher serves only the built dashboard and runs the real meeting h
     assert.equal((await fetch(base + url)).status, 404, url);
   }
   const health = await (await fetch(base + '/__local/health')).json();
-  assert.deepEqual(health, { ok: true, realtimeConfigured: true, missing: [] });
+  assert.equal(health.ok, true);
+  assert.equal(health.application, 'question-dashboard');
+  assert.match(health.launcherId, /^[a-f0-9]{64}$/);
+  assert.equal(health.realtimeConfigured, true);
+  assert.deepEqual(health.missing, []);
   assert.ok(!JSON.stringify(health).includes('fake-secret'));
   const endpoint = base + '/.netlify/functions/meeting?room=local-room';
   const token = await (await fetch(endpoint + '&action=token')).json();
@@ -63,4 +67,53 @@ test('missing local keys are reported by name without exposing values', async t 
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const response = await fetch(`http://127.0.0.1:${server.address().port}/.netlify/functions/meeting?room=test`);
   assert.equal(response.status, 503);
+});
+
+async function runLauncher(port) {
+  const { spawn } = require('node:child_process');
+  const child = spawn(process.execPath, [path.resolve('scripts/local-server.mjs'), '--port', String(port)], {
+    env: { ...process.env, ABLY_API_KEY: 'your_ably_api_key_here', MEETING_ADMIN_KEY: 'replace_with_test_key' },
+    windowsHide: true, stdio: ['ignore', 'pipe', 'pipe']
+  });
+  let output = '';
+  child.stdout.on('data', data => { output += data; });
+  child.stderr.on('data', data => { output += data; });
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => { child.kill(); reject(new Error('Launcher did not exit')); }, 10000);
+    child.on('error', error => { clearTimeout(timeout); reject(error); });
+    child.on('close', code => { clearTimeout(timeout); resolve({ code, output }); });
+  });
+}
+
+test('repeated launches reuse the same dashboard without stopping its server', async t => {
+  const { createLocalServer } = await import('../scripts/local-server.mjs');
+  const { server } = createLocalServer({ env: {} });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  for (let i = 0; i < 2; i++) {
+    const result = await runLauncher(port);
+    assert.equal(result.code, 0, result.output);
+    assert.match(result.output, /Reusing the running dashboard/);
+    assert.equal((await fetch(`http://127.0.0.1:${port}/__local/health`)).status, 200);
+  }
+});
+
+test('launcher refuses a port owned by another application or another checkout', async t => {
+  const http = require('node:http');
+  let health = { ok: true };
+  const server = http.createServer((request, response) => {
+    response.setHeader('Content-Type', 'application/json');
+    response.end(JSON.stringify(health));
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  for (const candidate of [{ ok: true }, { ok: true, application: 'question-dashboard', launcherId: 'different-checkout' }]) {
+    health = candidate;
+    const result = await runLauncher(port);
+    assert.equal(result.code, 1, result.output);
+    assert.match(result.output, /already in use/);
+    assert.equal((await fetch(`http://127.0.0.1:${port}`)).status, 200);
+  }
 });

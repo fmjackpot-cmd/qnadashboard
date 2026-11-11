@@ -2,13 +2,14 @@ import http from 'node:http';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createHandler } from '../netlify/functions/meeting.mjs';
 import { createBroker } from '../netlify/lib/meeting-ably.mjs';
 import { createDocumentHandler, MAX_PDF_BYTES } from '../netlify/lib/meeting-documents.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const launcherId = createHash('sha256').update(root).digest('hex');
 const contentTypes = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.pdf': 'application/pdf' };
 
@@ -41,7 +42,8 @@ export function createLocalServer({ publishDirectory = path.join(root, 'netlify-
       const url = new URL(request.url, `http://${request.headers.host}`);
       if (url.pathname === '/__local/health') {
         response.setHeader('Content-Type', 'application/json; charset=utf-8');
-        response.end(JSON.stringify({ ok: true, realtimeConfigured: missing.length === 0, missing }));
+        response.end(JSON.stringify({ ok: true, application: 'question-dashboard', launcherId,
+          realtimeConfigured: missing.length === 0, missing }));
         return;
       }
       if (['/.netlify/functions/meeting', '/.netlify/functions/meeting-document'].includes(url.pathname)) {
@@ -88,25 +90,38 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const port = portArg === -1 ? 8888 : Number(process.argv[portArg + 1]);
   if (!Number.isInteger(port) || port < 1 || port > 65535) { console.error('Port must be between 1 and 65535.'); process.exit(1); }
   const { server, missing } = createLocalServer();
-  server.on('error', error => {
+  const openAppWindow = () => {
+    const appBrowserArg = process.argv.indexOf('--app-browser');
+    if (appBrowserArg === -1) return;
+    const browser = process.argv[appBrowserArg + 1];
+    if (!browser) return;
+    const app = spawn(browser, [`--app=http://localhost:${port}`, '--window-size=1280,800'], {
+      detached: true, stdio: 'ignore', windowsHide: false
+    });
+    app.on('error', () => console.error('Could not open the app window. Open the local address manually.'));
+    app.on('exit', code => {
+      if (code) console.error('The browser could not start in app mode. Try installing the site as an app from the browser menu.');
+    });
+    app.unref();
+  };
+  server.on('error', async error => {
+    if (error.code === 'EADDRINUSE') {
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/__local/health`, { signal: AbortSignal.timeout(2000) });
+        const health = response.ok ? await response.json() : null;
+        if (health?.ok && health.application === 'question-dashboard' && health.launcherId === launcherId) {
+          console.log(`Reusing the running dashboard: http://localhost:${port}`);
+          console.log('The existing server keeps the current meeting state. Close its terminal to stop it.');
+          openAppWindow();
+          return;
+        }
+      } catch { /* Another application or an unresponsive server owns this port. */ }
+    }
     console.error(error.code === 'EADDRINUSE' ? `Port ${port} is already in use. Close the existing test server first.` : 'Could not start the local test server.');
     process.exitCode = 1;
   });
   server.listen(port, '127.0.0.1', () => {
-    const appBrowserArg = process.argv.indexOf('--app-browser');
-    if (appBrowserArg !== -1) {
-      const browser = process.argv[appBrowserArg + 1];
-      if (browser) {
-        const app = spawn(browser, [`--app=http://localhost:${port}`, '--window-size=1280,800'], {
-          detached: true, stdio: 'ignore', windowsHide: false
-        });
-        app.on('error', () => console.error('Could not open the app window. Open the local address manually.'));
-        app.on('exit', code => {
-          if (code) console.error('The browser could not start in app mode. Try installing the site as an app from the browser menu.');
-        });
-        app.unref();
-      }
-    }
+    openAppWindow();
     console.log(`Local dashboard: http://localhost:${port}`);
     console.log('Open this address in a normal window (admin) and a private window (viewer).');
     console.log('Keep this terminal open. Press Ctrl+C to stop. No deployment or Git push is performed.');
