@@ -26,8 +26,11 @@ Windows PowerShell에서 `pnpm`을 찾지 못하면 프로젝트 폴더에서 �
 
 - 전체 회귀 검증: `node --test tests/*.test.cjs`
 - 관리자 우선 회의 검증: `node --test tests/meeting.test.cjs`
+- 참여자 메시지 검증: `node --test tests/meeting-messages.test.cjs tests/meeting-ui.test.cjs` (관리자 전송 권한, 전체 참여자 수신, 연속 메시지, 재연결, 개별 닫기·브라우저 저장, 12시간/50개 보관, 동시 전송 충돌)
 - Ably 실시간 전송 검증: `node --test tests/ably.test.cjs`
 - 회의 PDF 업로드·자동 전환 검증: `node --test tests/meeting-documents.test.cjs tests/meeting-ui.test.cjs tests/local-server.test.cjs`
+
+2026-11-13 메시지 기능: 전체 자동 테스트 59개가 통과했습니다. Edge 브라우저에서 실제 메시지 서버 핸들러와 실시간 연결 대역을 사용해 관리자 작성·참여자 수신, 1440×900·913×640·390×844·812×375 창 크기, Esc·배경 클릭 시 유지, 닫기·새로고침, 긴 본문 스크롤, HTML의 텍스트 표시, 연속 메시지를 확인했습니다. PDF 열기는 대역을 사용했으며 실제 Netlify·Ably 네트워크 검증은 배포 후 별도로 필요합니다.
 - 회의 테스트는 서버 핸들러와 복수 이용자 세션을 함께 실행해 자유 탐색, 관리자 우선 전환, 동일 문항 재전송, 재연결, 회의 격리 및 관리자 인증을 검사합니다. Ably 테스트는 반복 HTTP 요청 없음, 수신 전용 토큰, SDK 연결 종료·갱신·복구, 오래된 스냅샷 방지 및 문서 로딩 중 최신 이벤트 적용을 검사합니다. 실제 Ably 연결과 Netlify Blobs는 키 설정·배포 후 두 기기로 확인해야 합니다.
 
 - 단위·회귀 테스트: `node --test tests/parser.test.cjs`

@@ -55,6 +55,32 @@
   .meeting-dialog { padding: 18px; }
 }
 
+#meeting-message-open[hidden] { display: none; }
+.meeting-dialog textarea { display: block; width: 100%; min-height: 110px; resize: vertical; padding: 12px; border: 1px solid #cbd5e1; border-radius: 8px; font: inherit; font-size: 14px; line-height: 1.6; }
+.meeting-dialog .meeting-message-hint { margin: 8px 0; color: #64748b; font-size: 12px; }
+#meeting-message-form { margin-top: 18px; }
+#meeting-message-send { background: #1e40af; color: white; }
+#meeting-message-feedback[data-state="error"] { color: #b91c1c; }
+.meeting-message-dialog { margin: auto; width: 62vw; height: 55vh; height: 55dvh; max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); padding: 0; border: 1px solid #cbd5e1; border-radius: 16px; color: #1e293b; background: #fff; box-shadow: 0 24px 80px #0f172a55; overflow: hidden; }
+.meeting-message-dialog[open] { display: flex; flex-direction: column; }
+.meeting-message-dialog::backdrop { background: #0f172a55; }
+.meeting-message-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 18px 24px; border-bottom: 1px solid #e2e8f0; background: #eff6ff; flex-shrink: 0; }
+.meeting-message-heading h2 { font-size: clamp(18px, 1.5vw, 26px); }
+.meeting-message-heading span { font-size: 13px; color: #1e40af; }
+.meeting-message-body { flex: 1; min-height: 0; overflow-y: auto; padding: clamp(16px, 2.5vw, 40px); white-space: pre-wrap; overflow-wrap: anywhere; font-size: clamp(20px, 2.2vw, 36px); line-height: 1.65; }
+.meeting-message-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 24px; border-top: 1px solid #e2e8f0; flex-shrink: 0; }
+.meeting-message-footer span { color: #64748b; font-size: 12px; }
+.meeting-message-footer button { flex-shrink: 0; padding: 10px 26px; border: 0; border-radius: 8px; background: #1e40af; color: white; font-size: 15px; font-weight: 600; cursor: pointer; }
+.meeting-message-dialog :focus-visible { outline: 3px solid #38bdf8; outline-offset: -3px; }
+@media (max-width: 600px) {
+  .meeting-message-dialog { width: calc(100vw - 24px); height: 65vh; height: 65dvh; }
+  .meeting-message-heading, .meeting-message-footer { padding: 12px 16px; }
+}
+@media (max-height: 420px) {
+  .meeting-message-dialog { height: calc(100vh - 24px); height: calc(100dvh - 24px); }
+  .meeting-message-heading, .meeting-message-footer { padding-top: 8px; padding-bottom: 8px; }
+}
+
 * {
   box-sizing: border-box;
   margin: 0;

@@ -16,6 +16,7 @@ const contentTypes = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascr
 export function createLocalServer({ publishDirectory = path.join(root, 'netlify-deploy'),
   env = process.env, broker, namespace = `local-test-${randomUUID()}` } = {}) {
   const records = new Map();
+  const recordVersions = new Map();
   const files = new Map();
   const documents = {
     set: async (id, data, { metadata }) => { files.set(id, { data, metadata }); },
@@ -35,12 +36,13 @@ export function createLocalServer({ publishDirectory = path.join(root, 'netlify-
     broker: missing.includes('ABLY_API_KEY') ? null : broker,
     store: {
       get: async room => records.get(room) || null,
-      getWithMetadata: async room => records.has(room) ? { data: records.get(room), etag: records.get(room).revision } : null,
+      getWithMetadata: async room => records.has(room) ? { data: records.get(room), etag: String(recordVersions.get(room)) } : null,
       setJSON: async (room, state, options = {}) => {
         if ((options.onlyIfNew && records.has(room)) ||
-            (options.onlyIfMatch && records.get(room)?.revision !== options.onlyIfMatch)) return { modified: false };
+            (options.onlyIfMatch && String(recordVersions.get(room)) !== options.onlyIfMatch)) return { modified: false };
         records.set(room, state);
-        return { modified: true, etag: state.revision };
+        recordVersions.set(room, (recordVersions.get(room) || 0) + 1);
+        return { modified: true, etag: String(recordVersions.get(room)) };
       }
     } });
   const publicRoot = path.resolve(publishDirectory);

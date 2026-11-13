@@ -33,8 +33,11 @@
   }
 
   class MeetingSession {
-    constructor({ request, subscribe, uploadFile, showDocument, getTarget, getDocument, showTarget, onStatus = () => {}, now = Date.now }) {
-      Object.assign(this, { request, subscribe, uploadFile, showDocument, getTarget, getDocument, showTarget, onStatus, now });
+    constructor({ request, subscribe, uploadFile, showDocument, getTarget, getDocument, showTarget, onStatus = () => {}, onMessage = () => {}, messageStorage, now = Date.now }) {
+      Object.assign(this, { request, subscribe, uploadFile, showDocument, getTarget, getDocument, showTarget, onStatus, onMessage, messageStorage, now });
+      this.messages = [];
+      this.seenMessages = new Set();
+      this.dismissedMessages = new Set();
       this.lockedUntil = 0;
       this.generation = 0;
       this.active = false;
@@ -52,6 +55,10 @@
       if (generation !== this.generation) return;
       Object.assign(this, { active: true, room, key, role: key ? 'admin' : 'viewer', lastRevision: null,
         lastState: null, pendingState: null, sharedDocument: null, latestSequence: 0, browsing: false, connectionLost: false });
+      try {
+        const dismissed = JSON.parse(this.messageStorage?.getItem(`dashboard-messages:${room}`) || '[]');
+        this.dismissedMessages = new Set(Array.isArray(dismissed) ? dismissed.filter(id => typeof id === 'string') : []);
+      } catch { this.dismissedMessages = new Set(); }
       this.onStatus(key ? 'admin' : 'waiting');
       try {
         const stop = await this.subscribe(room, {
@@ -83,6 +90,10 @@
       clearTimeout(this.unlockTimer);
       this.lockedUntil = 0;
       this.key = '';
+      this.messages = [];
+      this.seenMessages.clear();
+      this.dismissedMessages.clear();
+      this.onMessage(null);
       this.onStatus('offline');
     }
 
@@ -103,8 +114,9 @@
       if (!this.active) return;
       const generation = this.generation;
       try {
-        const { state } = await this.request(this.room);
+        const { state, messages } = await this.request(this.room);
         if (generation !== this.generation) return;
+        if (Array.isArray(messages)) for (const message of messages) this.receiveMessage(message);
         if (state) await this.receive(state);
         else if (!this.lastState) this.onStatus(this.role === 'admin' ? 'admin' : 'waiting');
         this.connectionLost = false;
@@ -117,6 +129,7 @@
     }
 
     receive(state) {
+      if (state?.type === 'message') { this.receiveMessage(state.message); return Promise.resolve(); }
       if (!this.active || !state ||
           !Number.isSafeInteger(state.sequence) || state.sequence < 1 ||
           typeof state.revision !== 'string' || !/^[a-f0-9]{64}$/.test(state.documentId || '') ||
@@ -147,6 +160,34 @@
       }
       this.pendingState = state;
       return this.applyPending();
+    }
+
+    receiveMessage(message) {
+      if (!this.active || this.role !== 'viewer' || !message || typeof message.id !== 'string' ||
+          !message.id || typeof message.text !== 'string' || !message.text.trim() || message.text.length > 1000 ||
+          !Number.isFinite(message.sentAt) || this.seenMessages.has(message.id)) return;
+      this.seenMessages.add(message.id);
+      if (this.dismissedMessages.has(message.id)) return;
+      this.messages.push(message);
+      if (this.messages.length === 1) this.onMessage(message);
+    }
+
+    dismissMessage() {
+      const message = this.messages.shift();
+      if (!message) return;
+      this.dismissedMessages.add(message.id);
+      try {
+        this.messageStorage?.setItem(`dashboard-messages:${this.room}`, JSON.stringify([...this.dismissedMessages].slice(-1000)));
+      } catch { /* Closing still works if browser storage is unavailable. */ }
+      this.onMessage(this.messages[0] || null);
+    }
+
+    async sendMessage(text) {
+      if (!this.active || this.role !== 'admin') throw new Error('관리자로 회의에 연결해주세요.');
+      if (typeof text !== 'string' || !text.trim() || text.length > 1000) throw new Error('메시지는 1~1,000자로 입력해주세요.');
+      const generation = this.generation;
+      const { message } = await this.request(this.room, { action: 'send-message', text }, this.key);
+      return generation === this.generation ? message : null;
     }
 
     applyPending(force = false) {
@@ -315,6 +356,11 @@
     const dialog = el('meeting-dialog');
     const status = el('meeting-status');
     const form = el('meeting-form');
+    const messageDialog = el('meeting-message-dialog');
+    const composeDialog = el('meeting-compose-dialog');
+    const messageForm = el('meeting-message-form');
+    const messageText = el('meeting-message-text');
+    const messageFeedback = el('meeting-message-feedback');
     const endpoint = root.DASHBOARD_CONFIG?.meetingEndpoint;
     const labels = {
       offline: '개별 열람 · 회의에 연결하면 관리자 이동이 우선 표시됩니다',
@@ -362,8 +408,18 @@
     };
     let roleMode = 'viewer';
     let pendingStartFile = null;
+    let messageStorage;
+    try { messageStorage = root.localStorage; } catch { /* Private browsing may restrict storage. */ }
     const session = new MeetingSession({
       request,
+      messageStorage,
+      onMessage: message => {
+        if (!message) { if (messageDialog.open) messageDialog.close(); return; }
+        el('meeting-message-body').textContent = message.text;
+        el('meeting-message-body').scrollTop = 0;
+        if (!messageDialog.open) messageDialog.showModal();
+        el('meeting-message-close').focus?.();
+      },
       getTarget: () => root.DashboardMeeting.getTarget(),
       showDocument: descriptor => root.DashboardMeeting.showDocument(descriptor),
       uploadFile: async (room, file, key) => {
@@ -378,6 +434,13 @@
         status.textContent = message || labels[kind];
         status.dataset.state = kind;
         el('meeting-send').hidden = !session?.active || session.role !== 'admin';
+        el('meeting-message-open').hidden = !session?.active || session.role !== 'admin';
+        el('meeting-message-settings').hidden = !session?.active || session.role !== 'admin';
+        messageForm.hidden = !session?.active || session.role !== 'admin';
+        if (kind === 'offline') {
+          messageText.value = ''; messageFeedback.textContent = '';
+          if (composeDialog.open) composeDialog.close();
+        }
         el('meeting-send').disabled = session?.active && session.role === 'admin' && !session.canNavigate(false);
         el('meeting-return').hidden = !session?.active || session.role !== 'viewer' || !session.browsing;
         const button = el('meeting-open');
@@ -465,6 +528,34 @@
       finally { buttons.forEach(button => { button.disabled = false; }); }
     };
     el('meeting-send').onclick = () => session.navigate(root.DashboardMeeting.getTarget());
+    el('meeting-message-open').onclick = () => {
+      if (!session.active || session.role !== 'admin') return;
+      if (dialog.open) dialog.close();
+      if (!composeDialog.open) composeDialog.showModal();
+      messageText.focus?.();
+    };
+    el('meeting-message-settings').onclick = el('meeting-message-open').onclick;
+    el('meeting-compose-close').onclick = () => composeDialog.close();
+    messageForm.onsubmit = async event => {
+      event.preventDefault();
+      const button = el('meeting-message-send');
+      if (button.disabled) return;
+      button.disabled = true;
+      messageFeedback.dataset.state = 'sending';
+      messageFeedback.textContent = '메시지 전송 중…';
+      try {
+        const message = await session.sendMessage(messageText.value);
+        if (!message) return;
+        messageText.value = '';
+        messageFeedback.dataset.state = 'sent';
+        messageFeedback.textContent = '전체 참여자에게 메시지를 전송했습니다.';
+      } catch (error) {
+        messageFeedback.dataset.state = 'error';
+        messageFeedback.textContent = error.message;
+      } finally { button.disabled = false; }
+    };
+    messageDialog.addEventListener('cancel', event => event.preventDefault());
+    el('meeting-message-close').onclick = () => session.dismissMessage();
     el('meeting-return').onclick = () => session.returnToAdmin().catch(error => session.onStatus('error', error.message));
     el('meeting-leave').onclick = () => {
       session.leave();

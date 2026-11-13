@@ -21,7 +21,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.9/pdf-lib.min.js"></script>
 
   <!-- External Stylesheet -->
-  <link rel="stylesheet" href="style.css?v=20261105-mobile-viewport">
+  <link rel="stylesheet" href="style.css?v=20261113-messages">
 </head>
 <body>
 
@@ -107,6 +107,10 @@
           <button type="button" class="btn-tool btn-meeting" id="meeting-open" data-state="offline" title="회의 연결 및 설정" aria-label="회의 연결 및 설정" aria-haspopup="dialog" aria-controls="meeting-dialog">
             <i class="fa-solid fa-users" aria-hidden="true"></i>
             <span class="btn-text-responsive">회의</span>
+          </button>
+          <button type="button" class="btn-tool" id="meeting-message-open" hidden title="참여자에게 메시지 보내기" aria-label="참여자에게 메시지 보내기" aria-haspopup="dialog" aria-controls="meeting-compose-dialog">
+            <i class="fa-solid fa-comment-dots" aria-hidden="true"></i>
+            <span class="btn-text-responsive">메시지</span>
           </button>
           <button class="btn-tool btn-tool-toc" id="btn-show-toc" title="전체 목차를 세로 스크롤로 연속 열람합니다" aria-label="전체 목차 보기">
             <i class="fa-solid fa-list-check"></i>
@@ -255,6 +259,7 @@
     <div class="meeting-actions">
       <button type="button" id="meeting-return" hidden>관리자 화면으로</button>
       <button type="button" id="meeting-send" hidden>현재 화면 전송</button>
+      <button type="button" id="meeting-message-settings" hidden aria-haspopup="dialog" aria-controls="meeting-compose-dialog">메시지 보내기</button>
     </div>
     <form id="meeting-form">
       <label for="meeting-room">회의 코드</label>
@@ -284,8 +289,32 @@
     <p id="meeting-error" role="status" aria-live="polite"></p>
     <button type="button" id="meeting-leave" hidden>회의 연결 해제</button>
   </dialog>
+  <dialog id="meeting-compose-dialog" class="meeting-dialog" aria-labelledby="meeting-compose-heading">
+    <div class="meeting-dialog-heading">
+      <h2 id="meeting-compose-heading">참여자에게 메시지 보내기</h2>
+      <button type="button" id="meeting-compose-close" aria-label="메시지 작성 닫기">닫기</button>
+    </div>
+    <form id="meeting-message-form" hidden>
+      <label for="meeting-message-text">메시지 내용</label>
+      <textarea id="meeting-message-text" rows="5" maxlength="1000" required placeholder="전체 참여자에게 전달할 내용을 입력하세요."></textarea>
+      <p class="meeting-message-hint">최대 1,000자 · 참여자가 닫을 때까지 팝업으로 표시됩니다.</p>
+      <button type="submit" id="meeting-message-send">전체 참여자에게 전송</button>
+      <p id="meeting-message-feedback" role="status" aria-live="polite"></p>
+    </form>
+  </dialog>
+  <dialog id="meeting-message-dialog" class="meeting-message-dialog" aria-labelledby="meeting-message-heading" aria-describedby="meeting-message-body" closedby="none">
+    <header class="meeting-message-heading">
+      <h2 id="meeting-message-heading">회의 메시지</h2>
+      <span>관리자 알림</span>
+    </header>
+    <div id="meeting-message-body" class="meeting-message-body" tabindex="0"></div>
+    <footer class="meeting-message-footer">
+      <span>내용을 확인한 뒤 닫아주세요.</span>
+      <button type="button" id="meeting-message-close" autofocus>닫기</button>
+    </footer>
+  </dialog>
   <script src="dashboard-config.js?v=20261103-empty-start" defer></script>
   <script src="app.js?v=20261110-category-default" defer></script>
-  <script src="live-session.js?v=20261110-cbe-default" defer></script>
+  <script src="live-session.js?v=20261113-messages" defer></script>
 </body>
 </html>

@@ -22,6 +22,8 @@ test('meeting form authenticates, clears the key field, and shares a viewer URL 
   const descriptor = { id: 'a'.repeat(64), fileId: '12345678-1234-1234-1234-123456789abc', name: 'meeting.pdf', url: '/.netlify/functions/meeting-document?room=audit-2026&file=12345678-1234-1234-1234-123456789abc' };
   let copied;
   let sharedState = null;
+  let receiveBroadcast;
+  const storedMessages = [];
   const loaded = [];
   const context = {
     document: doc, location, URL, AbortSignal,
@@ -31,7 +33,7 @@ test('meeting form authenticates, clears the key field, and shares a viewer URL 
     Ably: { Realtime: class {
       constructor() {
         this.connection = { on() {}, off() {} };
-        this.channels = { get: () => ({ on() {}, off() {}, subscribe: async () => {}, unsubscribe() {} }) };
+        this.channels = { get: () => ({ on() {}, off() {}, subscribe: async (_, callback) => { receiveBroadcast = callback; }, unsubscribe() {} }) };
       }
       connect() {}
       close() {}
@@ -48,8 +50,13 @@ test('meeting form authenticates, clears the key field, and shares a viewer URL 
       if (new URL(url).searchParams.get('action') === 'token') return { ok: true, json: async () => ({ channel: 'test', tokenRequest: {} }) };
       writes.push({ url: String(url), body, headers: options.headers });
       if (body?.action === 'authenticate') return { ok: true, json: async () => ({ authenticated: true }) };
+      if (body?.action === 'send-message') {
+        const message = { id: `message-${storedMessages.length}`, text: body.text, sentAt: Date.now() };
+        storedMessages.push(message);
+        return { ok: true, json: async () => ({ message }) };
+      }
       if (body) sharedState = { sequence: 1, revision: 'one', document: descriptor, documentId: descriptor.id, mode: 'question', questionId: 3, controllerId: body.controllerId };
-      return { ok: true, json: async () => ({ state: sharedState }) };
+      return { ok: true, json: async () => ({ state: sharedState, messages: storedMessages }) };
     }
   };
   context.window = context;
@@ -104,6 +111,35 @@ test('meeting form authenticates, clears the key field, and shares a viewer URL 
   assert.equal(loaded.length, 1);
   assert.equal(loaded[0].document.fileId, descriptor.fileId);
   assert.equal(elements.get('meeting-open').dataset.state, 'cooldown');
+  assert.equal(elements.get('meeting-message-open').hidden, false);
+  elements.get('meeting-message-text').value = '<img src=x onerror=alert(1)>\n회의 메시지';
+  await elements.get('meeting-message-form').onsubmit({ preventDefault() {} });
+  assert.equal(writes.at(-1).body.action, 'send-message');
+  assert.equal(elements.get('meeting-message-text').value, '');
+  assert.equal(elements.get('meeting-message-feedback').dataset.state, 'sent');
+  elements.get('meeting-leave').onclick();
+  elements.get('start-viewer').onclick();
+  elements.get('meeting-room').value = 'audit-2026';
+  await elements.get('meeting-form').onsubmit({ preventDefault() {} });
+  const popup = elements.get('meeting-message-dialog');
+  assert.equal(elements.get('meeting-message-form').hidden, true);
+  assert.equal(elements.get('meeting-message-open').hidden, true);
+  assert.equal(popup.open, true);
+  assert.equal(elements.get('meeting-message-body').textContent, storedMessages[0].text);
+  let cancelled = false;
+  popup.cancel({ preventDefault() { cancelled = true; } });
+  assert.equal(cancelled, true);
+  assert.equal(popup.open, true);
+  receiveBroadcast({ data: { type: 'message', message: { id: 'next', text: '다음 메시지', sentAt: Date.now() } } });
+  assert.equal(elements.get('meeting-message-body').textContent, storedMessages[0].text);
+  receiveBroadcast({ data: { ...sharedState, sequence: 2, revision: 'next-navigation' } });
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(popup.open, true, 'navigation does not dismiss the popup');
+  elements.get('meeting-message-close').onclick();
+  assert.equal(elements.get('meeting-message-body').textContent, '다음 메시지');
+  assert.equal(popup.open, true);
+  elements.get('meeting-message-close').onclick();
+  assert.equal(popup.open, false);
 });
 
 function appContext() {

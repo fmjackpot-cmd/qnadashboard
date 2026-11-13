@@ -21,8 +21,12 @@ export function createHandler({ store, documents, adminKey, broker, now = Date.n
     try {
       if (request.method === 'GET') {
         if (url.searchParams.get('action') === 'token') return json(await broker.issueToken(room));
-        const state = await store.get(room, { type: 'json', consistency: 'strong' });
-        return json({ state: state && now() - state.updatedAt < maxAge ? state : null });
+        const [state, messages] = await Promise.all([
+          store.get(room, { type: 'json', consistency: 'strong' }),
+          store.get(`messages:${room}`, { type: 'json', consistency: 'strong' })
+        ]);
+        return json({ state: state && now() - state.updatedAt < maxAge ? state : null,
+          messages: (messages || []).filter(message => now() - message.sentAt < maxAge) });
       }
       const token = request.headers.get('authorization') || '';
       if (!timingSafeEqual(digest(token), digest(`Bearer ${adminKey}`))) return json({ error: '관리자 인증키를 확인해주세요.' }, 401);
@@ -30,10 +34,27 @@ export function createHandler({ store, documents, adminKey, broker, now = Date.n
       const origin = request.headers.get('origin');
       if (origin && origin !== url.origin) return json({ error: '다른 사이트에서 제어할 수 없습니다.' }, 403);
       const bodyText = await request.text();
-      if (bodyText.length > 2048) return json({ error: '요청이 너무 큽니다.' }, 413);
+      if (bodyText.length > 8192) return json({ error: '요청이 너무 큽니다.' }, 413);
       let body;
-      try { body = JSON.parse(bodyText); } catch { return json({ error: '올바른 JSON 요청이 아닙니다.' }, 400); }
+      try { body = JSON.parse(bodyText); } catch { return json({ error: '올바른 JSON 요청이 아닙니다.' }, bodyText.length > 2048 ? 413 : 400); }
+      if (body?.action !== 'send-message' && bodyText.length > 2048) return json({ error: '요청이 너무 큽니다.' }, 413);
       if (body?.action === 'authenticate') return json({ authenticated: true });
+      if (body?.action === 'send-message') {
+        if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 1000) {
+          return json({ error: '메시지는 1~1,000자로 입력해주세요.' }, 400);
+        }
+        const messageKey = `messages:${room}`;
+        const snapshot = store.getWithMetadata
+          ? await store.getWithMetadata(messageKey, { type: 'json', consistency: 'strong' }) : null;
+        const previous = store.getWithMetadata ? snapshot?.data : await store.get(messageKey, { type: 'json', consistency: 'strong' });
+        const message = { id: revision(), text: body.text.trim(), sentAt: now() };
+        const messages = [...(previous || []).filter(item => now() - item.sentAt < maxAge), message].slice(-50);
+        const written = await store.setJSON(messageKey, messages, store.getWithMetadata
+          ? (snapshot ? { onlyIfMatch: snapshot.etag } : { onlyIfNew: true }) : undefined);
+        if (written?.modified === false) return json({ error: '다른 관리자가 메시지를 전송했습니다. 다시 전송해주세요.' }, 409);
+        await broker.publish(room, { type: 'message', revision: message.id, message });
+        return json({ message });
+      }
       if (body?.controllerId !== undefined && !/^[a-zA-Z0-9_-]{1,80}$/.test(body.controllerId)) {
         return json({ error: '관리자 세션 정보가 올바르지 않습니다.' }, 400);
       }
