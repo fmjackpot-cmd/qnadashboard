@@ -34,12 +34,20 @@ export function createHandler({ store, documents, adminKey, broker, now = Date.n
       let body;
       try { body = JSON.parse(bodyText); } catch { return json({ error: '올바른 JSON 요청이 아닙니다.' }, 400); }
       if (body?.action === 'authenticate') return json({ authenticated: true });
+      if (body?.controllerId !== undefined && !/^[a-zA-Z0-9_-]{1,80}$/.test(body.controllerId)) {
+        return json({ error: '관리자 세션 정보가 올바르지 않습니다.' }, 400);
+      }
       if (!body || !/^[a-f0-9]{64}$/.test(body.documentId || '') ||
           !['question', 'toc'].includes(body.mode) ||
           (body.mode === 'question' && (!Number.isSafeInteger(body.questionId) || body.questionId < 1))) {
         return json({ error: '문서 또는 문항 정보가 올바르지 않습니다.' }, 400);
       }
-      const previous = await store.get(room, { type: 'json', consistency: 'strong' });
+      const snapshot = store.getWithMetadata
+        ? await store.getWithMetadata(room, { type: 'json', consistency: 'strong' }) : null;
+      const previous = store.getWithMetadata ? snapshot?.data : await store.get(room, { type: 'json', consistency: 'strong' });
+      if (previous?.controllerId && previous.controllerId !== body.controllerId && now() - previous.updatedAt < 2000) {
+        return json({ error: '다른 관리자가 화면을 변경했습니다. 변경 후 2초가 지나면 다시 선택해주세요.', state: previous }, 409);
+      }
       let document = previous?.document;
       if (body.action === 'set-document') {
         if (!documents || !validFileId(body.fileId)) return json({ error: '먼저 회의 자료를 업로드해주세요.' }, 400);
@@ -52,7 +60,13 @@ export function createHandler({ store, documents, adminKey, broker, now = Date.n
       const state = { revision: revision(), sequence: (previous?.sequence || 0) + 1, updatedAt: now(), documentId: body.documentId,
         mode: body.mode, questionId: body.mode === 'question' ? body.questionId : null };
       if (document) state.document = document;
-      await store.setJSON(room, state);
+      if (body.controllerId) state.controllerId = body.controllerId;
+      const written = await store.setJSON(room, state, store.getWithMetadata
+        ? (snapshot ? { onlyIfMatch: snapshot.etag } : { onlyIfNew: true }) : undefined);
+      if (written?.modified === false) {
+        return json({ error: '다른 관리자가 먼저 화면을 변경했습니다. 최신 화면을 확인하고 다시 선택해주세요.',
+          state: await store.get(room, { type: 'json', consistency: 'strong' }) }, 409);
+      }
       await broker.publish(room, state);
       return json({ state });
     } catch (error) {

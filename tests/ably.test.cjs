@@ -26,8 +26,8 @@ test('idle viewers and presenters make no periodic HTTP requests; moves arrive t
   });
   await admin.join('room', 'test-admin-key');
   await admin.navigate({ mode: 'question', questionId: 2 });
-  assert.equal(adminRequests, 2, 'only authentication and deliberate move');
-  assert.equal(subscriptions, 0, 'admin needs no realtime connection');
+  assert.equal(adminRequests, 3, 'authentication, initial snapshot, and deliberate move only');
+  assert.equal(subscriptions, 1, 'admins also receive realtime moves');
   viewer.leave(); admin.leave();
 });
 

@@ -33,7 +33,16 @@ export function createLocalServer({ publishDirectory = path.join(root, 'netlify-
   const documentHandler = createDocumentHandler({ documents, adminKey });
   const handler = createHandler({ documents, adminKey,
     broker: missing.includes('ABLY_API_KEY') ? null : broker,
-    store: { get: async room => records.get(room) || null, setJSON: async (room, state) => { records.set(room, state); } } });
+    store: {
+      get: async room => records.get(room) || null,
+      getWithMetadata: async room => records.has(room) ? { data: records.get(room), etag: records.get(room).revision } : null,
+      setJSON: async (room, state, options = {}) => {
+        if ((options.onlyIfNew && records.has(room)) ||
+            (options.onlyIfMatch && records.get(room)?.revision !== options.onlyIfMatch)) return { modified: false };
+        records.set(room, state);
+        return { modified: true, etag: state.revision };
+      }
+    } });
   const publicRoot = path.resolve(publishDirectory);
   const server = http.createServer(async (request, response) => {
     response.setHeader('Cache-Control', 'no-store');

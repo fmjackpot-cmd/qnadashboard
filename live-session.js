@@ -33,8 +33,9 @@
   }
 
   class MeetingSession {
-    constructor({ request, subscribe, uploadFile, showDocument, getTarget, getDocument, showTarget, onStatus = () => {} }) {
-      Object.assign(this, { request, subscribe, uploadFile, showDocument, getTarget, getDocument, showTarget, onStatus });
+    constructor({ request, subscribe, uploadFile, showDocument, getTarget, getDocument, showTarget, onStatus = () => {}, now = Date.now }) {
+      Object.assign(this, { request, subscribe, uploadFile, showDocument, getTarget, getDocument, showTarget, onStatus, now });
+      this.lockedUntil = 0;
       this.generation = 0;
       this.active = false;
       this.lastRevision = null;
@@ -44,6 +45,7 @@
 
     async join(room, key = '') {
       this.leave();
+      this.controllerId = root.crypto?.randomUUID?.() || `admin-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const generation = this.generation;
       if (!/^[a-zA-Z0-9_-]{1,64}$/.test(room)) throw new Error('회의 코드는 영문·숫자·밑줄·하이픈 1~64자로 입력해주세요.');
       if (key) await this.request(room, { action: 'authenticate' }, key);
@@ -51,7 +53,6 @@
       Object.assign(this, { active: true, room, key, role: key ? 'admin' : 'viewer', lastRevision: null,
         lastState: null, pendingState: null, sharedDocument: null, latestSequence: 0, browsing: false, connectionLost: false });
       this.onStatus(key ? 'admin' : 'waiting');
-      if (key) return; // Presenters publish over HTTP; no subscription or heartbeat needed.
       try {
         const stop = await this.subscribe(room, {
           onState: state => { if (generation === this.generation) this.receive(state); },
@@ -79,6 +80,8 @@
       if (this.stopSubscription) this.stopSubscription();
       this.stopSubscription = null;
       this.active = false;
+      clearTimeout(this.unlockTimer);
+      this.lockedUntil = 0;
       this.key = '';
       this.onStatus('offline');
     }
@@ -86,24 +89,24 @@
     async loadSharedDocument() {
       if (!this.active || this.role !== 'admin') throw new Error('관리자로 회의에 연결해주세요.');
       const generation = this.generation;
-      const { state } = await this.request(this.room);
+      const state = this.lastState || (await this.request(this.room)).state;
       if (generation !== this.generation) return;
       if (!state?.document) throw new Error('회의 자료가 없습니다. 첫 관리자는 PDF를 선택해 업로드해주세요.');
-      await this.showTarget(state);
+      if (this.lastRevision !== state.revision) await this.receive(state);
       if (generation !== this.generation) return;
+      if (!this.lastState) throw new Error('회의 자료를 표시하지 못했습니다. 연결 상태와 PDF를 확인하고 다시 연결해주세요.');
       this.sharedDocument = state.document;
-      this.lastRevision = state.revision;
-      this.onStatus('admin');
+      this.onStatus(this.canNavigate(false) ? 'admin' : 'cooldown');
     }
 
     async sync() {
-      if (!this.active || this.role !== 'viewer') return;
+      if (!this.active) return;
       const generation = this.generation;
       try {
         const { state } = await this.request(this.room);
         if (generation !== this.generation) return;
         if (state) await this.receive(state);
-        else if (!this.lastState) this.onStatus('waiting');
+        else if (!this.lastState) this.onStatus(this.role === 'admin' ? 'admin' : 'waiting');
         this.connectionLost = false;
       } catch (error) {
         if (generation === this.generation) {
@@ -114,17 +117,34 @@
     }
 
     receive(state) {
-      if (!this.active || this.role !== 'viewer' || !state ||
+      if (!this.active || !state ||
           !Number.isSafeInteger(state.sequence) || state.sequence < 1 ||
           typeof state.revision !== 'string' || !/^[a-f0-9]{64}$/.test(state.documentId || '') ||
           !['question', 'toc'].includes(state.mode) ||
           (state.mode === 'question' && (!Number.isSafeInteger(state.questionId) || state.questionId < 1))) return Promise.resolve();
       if (state.sequence <= this.latestSequence) {
         if (state.sequence === this.latestSequence && this.pendingState?.revision === state.revision && this.lastRevision !== state.revision) return this.applyPending();
-        if (this.connectionLost && this.lastRevision === state.revision) this.onStatus(this.browsing ? 'browsing' : 'following');
+        if (this.connectionLost && this.lastRevision === state.revision) this.onStatus(this.role === 'admin'
+          ? (this.canNavigate(false) ? 'admin' : 'cooldown') : (this.browsing ? 'browsing' : 'following'));
         return Promise.resolve();
       }
       this.latestSequence = state.sequence;
+      if (this.role === 'admin' && state.controllerId === this.controllerId) {
+        this.lastRevision = state.revision;
+        this.lastState = state;
+        this.pendingState = null;
+        return Promise.resolve();
+      }
+      if (this.role === 'admin' && state.controllerId) {
+        this.lockedUntil = this.now() + 2000;
+        clearTimeout(this.unlockTimer);
+        const generation = this.generation;
+        this.unlockTimer = setTimeout(() => {
+          if (this.active && generation === this.generation) this.onStatus('admin');
+        }, 2000);
+        this.unlockTimer?.unref?.();
+        this.onStatus('cooldown');
+      }
       this.pendingState = state;
       return this.applyPending();
     }
@@ -142,14 +162,21 @@
           if (generation !== this.generation) return;
           this.lastRevision = state.revision;
           this.lastState = state;
+          if (state.document) this.sharedDocument = state.document;
           this.browsing = false;
           this.connectionLost = false;
-          this.onStatus('following');
+          this.onStatus(this.role === 'admin' ? (this.canNavigate(false) ? 'admin' : 'cooldown') : 'following');
         } catch (error) {
           if (generation === this.generation) this.onStatus('error', error.message);
         }
       });
       return this.applyQueue;
+    }
+
+    canNavigate(notify = true) {
+      const allowed = !this.active || this.role !== 'admin' || this.now() >= this.lockedUntil;
+      if (!allowed && notify) this.onStatus('cooldown');
+      return allowed;
     }
 
     navigate(target) {
@@ -160,6 +187,7 @@
         return Promise.resolve();
       }
       if (this.documentBusy) return Promise.resolve();
+      if (!this.canNavigate()) return Promise.resolve();
       const generation = this.generation;
       const doc = this.getDocument();
       if (!doc.ready || !doc.hosted || !doc.id) {
@@ -169,18 +197,22 @@
       // Serialize writes so a slow earlier request cannot overwrite a later move.
       this.sendQueue = this.sendQueue.catch(() => {}).then(async () => {
         if (generation !== this.generation) return;
+        if (!this.canNavigate()) return;
         this.onStatus('sending');
         try {
           const newDocument = doc.shared && this.sharedDocument?.fileId !== doc.shared.fileId;
-          const { state } = await this.request(this.room, { ...target, documentId: doc.id,
+          const { state } = await this.request(this.room, { ...target, documentId: doc.id, controllerId: this.controllerId,
             ...(newDocument ? { action: 'set-document', fileId: doc.shared.fileId } : {}) }, this.key);
           if (generation !== this.generation) return;
-          this.lastRevision = state.revision;
-          if (doc.shared) this.sharedDocument = doc.shared;
+          await this.receive(state);
+          if (doc.shared && state.sequence === this.latestSequence) this.sharedDocument = doc.shared;
           this.connectionLost = false;
-          this.onStatus('admin');
+          this.onStatus(this.canNavigate(false) ? 'admin' : 'cooldown');
         } catch (error) {
-          if (generation === this.generation) this.onStatus('error', `${error.message} ‘현재 화면 전송’으로 다시 시도해주세요.`);
+          if (generation === this.generation) {
+            if (error.state) { await this.receive(error.state); await this.returnToAdmin(); }
+            this.onStatus('error', `${error.message} ‘현재 화면 전송’으로 다시 시도해주세요.`);
+          }
         }
       });
       return this.sendQueue;
@@ -189,6 +221,7 @@
     async shareFile(file) {
       if (!this.active || this.role !== 'admin') throw new Error('관리자로 회의에 연결해주세요.');
       if (this.documentBusy) throw new Error('자료를 처리하는 중입니다. 완료 후 다시 선택해주세요.');
+      if (!this.canNavigate()) throw new Error('다른 관리자의 변경 후 2초가 지나면 다시 선택해주세요.');
       if (!file || !file.size || (!file.name?.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf')) throw new Error('회의에 사용할 PDF 파일을 선택해주세요.');
       if (file.size > 50000000) throw new Error('PDF는 최대 50MB까지 업로드할 수 있습니다.');
       const generation = this.generation;
@@ -202,13 +235,14 @@
         if (generation !== this.generation) return;
         await this.showDocument(document);
         if (generation !== this.generation) return;
-        const { state } = await this.request(room, { ...this.getTarget(), action: 'set-document', fileId: document.fileId, documentId: document.id }, key);
+        const { state } = await this.request(room, { ...this.getTarget(), controllerId: this.controllerId, action: 'set-document', fileId: document.fileId, documentId: document.id }, key);
         if (generation !== this.generation) return;
-        this.lastRevision = state.revision;
+        await this.receive(state);
         this.sharedDocument = document;
         this.onStatus('admin');
         return state;
       } catch (error) {
+        if (generation === this.generation && error.state) { await this.receive(error.state); await this.returnToAdmin(); }
         if (generation === this.generation) this.onStatus('error', error.message);
         throw error;
       } finally { this.documentBusy = false; }
@@ -291,6 +325,7 @@
       following: '관리자 화면 표시 중 · 자유롭게 열람할 수 있습니다',
       browsing: '자유 열람 중 · 관리자 이동 시 자동 전환됩니다',
       admin: '관리자 제어 중 · 문항을 선택하면 모든 이용자에게 전송됩니다',
+      cooldown: '다른 관리자가 화면을 변경했습니다 · 2초 후 문항을 변경할 수 있습니다',
       sending: '전체 이용자에게 전송 중…'
     };
     const request = async (room, body, key, action) => {
@@ -306,7 +341,11 @@
       });
       let result;
       try { result = await response.json(); } catch { throw new Error('회의 서버가 없습니다. Functions를 포함해 Netlify에 배포해주세요.'); }
-      if (!response.ok) throw new Error(result.error || '회의 서버 연결에 실패했습니다.');
+      if (!response.ok) {
+        const error = new Error(result.error || '회의 서버 연결에 실패했습니다.');
+        error.state = result.state;
+        throw error;
+      }
       return result;
     };
     let sdkLoading;
@@ -339,6 +378,7 @@
         status.textContent = message || labels[kind];
         status.dataset.state = kind;
         el('meeting-send').hidden = !session?.active || session.role !== 'admin';
+        el('meeting-send').disabled = session?.active && session.role === 'admin' && !session.canNavigate(false);
         el('meeting-return').hidden = !session?.active || session.role !== 'viewer' || !session.browsing;
         const button = el('meeting-open');
         button.dataset.state = kind;
@@ -451,6 +491,7 @@
       if (session.active && session.role === 'viewer') session.applyPending();
     });
     root.MeetingFiles = {
+      canNavigate: () => session.canNavigate(),
       startWithFile(file) {
         if (root.DashboardMeeting.getDocument().ready || session.active) return false;
         openMeeting('admin', file);
@@ -474,7 +515,7 @@
       session.stopSubscription = null;
     });
     root.addEventListener('pageshow', event => {
-      if (event.persisted && session.active && session.role === 'viewer') join(session.room, '').catch(error => session.onStatus('error', error.message));
+      if (event.persisted && session.active) join(session.room, session.key).catch(error => session.onStatus('error', error.message));
     });
     setRole('viewer');
     session.onStatus('offline');

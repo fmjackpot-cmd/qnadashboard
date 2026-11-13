@@ -21,12 +21,21 @@ test('meeting form authenticates, clears the key field, and shares a viewer URL 
   const pdf = new File(['%PDF-1.7\nfixture'], 'meeting.pdf', { type: 'application/pdf' });
   const descriptor = { id: 'a'.repeat(64), fileId: '12345678-1234-1234-1234-123456789abc', name: 'meeting.pdf', url: '/.netlify/functions/meeting-document?room=audit-2026&file=12345678-1234-1234-1234-123456789abc' };
   let copied;
+  let sharedState = null;
   const loaded = [];
   const context = {
     document: doc, location, URL, AbortSignal,
     history: { replaceState: (_, __, url) => { location.href = String(url); } },
     navigator: { clipboard: { writeText: async text => { copied = text; } } },
     setTimeout: () => 1, clearTimeout() {},
+    Ably: { Realtime: class {
+      constructor() {
+        this.connection = { on() {}, off() {} };
+        this.channels = { get: () => ({ on() {}, off() {}, subscribe: async () => {}, unsubscribe() {} }) };
+      }
+      connect() {}
+      close() {}
+    } },
     addEventListener: (name, fn) => { listeners[name] = fn; },
     DASHBOARD_CONFIG: { meetingEndpoint: '/.netlify/functions/meeting' },
     DashboardMeeting: { getDocument: () => ({ ready: true, hosted: true, id: 'a'.repeat(64) }), getTarget: () => ({ mode: 'question', questionId: 3 }), getFile: () => pdf, showDocument: async () => {}, showTarget: async state => loaded.push(state) },
@@ -36,8 +45,11 @@ test('meeting form authenticates, clears the key field, and shares a viewer URL 
         return { ok: true, json: async () => ({ document: descriptor }) };
       }
       const body = options.body ? JSON.parse(options.body) : null;
+      if (new URL(url).searchParams.get('action') === 'token') return { ok: true, json: async () => ({ channel: 'test', tokenRequest: {} }) };
       writes.push({ url: String(url), body, headers: options.headers });
-      return { ok: true, json: async () => body?.action === 'authenticate' ? { authenticated: true } : { state: { revision: 'one', document: descriptor, documentId: descriptor.id, mode: 'question', questionId: 3 } } };
+      if (body?.action === 'authenticate') return { ok: true, json: async () => ({ authenticated: true }) };
+      if (body) sharedState = { sequence: 1, revision: 'one', document: descriptor, documentId: descriptor.id, mode: 'question', questionId: 3, controllerId: body.controllerId };
+      return { ok: true, json: async () => ({ state: sharedState }) };
     }
   };
   context.window = context;
@@ -66,10 +78,10 @@ test('meeting form authenticates, clears the key field, and shares a viewer URL 
   assert.equal(elements.get('meeting-open').dataset.state, 'admin');
   assert.match(elements.get('meeting-open').title, /관리자 제어 중/);
   assert.equal(writes[0].body.action, 'authenticate');
-  assert.equal(writes[1].body, pdf);
-  assert.equal(writes[1].headers['X-Document-Type'], 'receipt');
-  assert.equal(writes[2].body.action, 'set-document');
-  assert.equal(writes[2].body.questionId, 3);
+  assert.equal(writes[2].body, pdf);
+  assert.equal(writes[2].headers['X-Document-Type'], 'receipt');
+  assert.equal(writes[3].body.action, 'set-document');
+  assert.equal(writes[3].body.questionId, 3);
   listeners['dashboard-document-ready']();
   assert.equal(elements.get('dashboard-shell').dataset.starting, 'false');
   assert.equal(elements.get('dashboard-shell').inert, false);
@@ -91,7 +103,7 @@ test('meeting form authenticates, clears the key field, and shares a viewer URL 
   assert.equal(writes[before + 1].body, null);
   assert.equal(loaded.length, 1);
   assert.equal(loaded[0].document.fileId, descriptor.fileId);
-  assert.equal(elements.get('meeting-open').dataset.state, 'admin');
+  assert.equal(elements.get('meeting-open').dataset.state, 'cooldown');
 });
 
 function appContext() {
@@ -123,6 +135,19 @@ test('actual dashboard navigation broadcasts local moves and never echoes remote
   await context.openQuestion(1);
   assert.equal(events.length, 2);
   assert.equal(context.window.DashboardMeeting.getTarget().questionId, 1);
+});
+
+test('administrator cooldown blocks question and TOC clicks before changing the local screen; remote navigation still applies', async () => {
+  const { context, events } = appContext();
+  await context.openQuestion(1);
+  context.window.MeetingFiles = { canNavigate: () => false };
+  await context.openQuestion(2);
+  await context.openTocView();
+  assert.equal(events.length, 1);
+  assert.equal(context.window.DashboardMeeting.getTarget().questionId, 1);
+  await context.window.DashboardMeeting.showTarget({ documentId: 'a'.repeat(64), mode: 'question', questionId: 2 });
+  assert.equal(context.window.DashboardMeeting.getTarget().questionId, 2);
+  assert.equal(events.length, 1);
 });
 
 test('dashboard refuses mismatched PDFs and missing questions; a local PDF switches only to an uploaded meeting document', async () => {

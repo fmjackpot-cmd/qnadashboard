@@ -66,13 +66,15 @@ async function fixture() {
   const { createDocumentHandler, MAX_PDF_BYTES } = await import('../netlify/lib/meeting-documents.mjs');
   const { createHandler } = await import('../netlify/functions/meeting.mjs');
   const files = new Map(), states = new Map(), subscribers = new Set(), published = [], order = [];
+  let clock = Date.now();
+  const subscribe = async (_, handlers) => { subscribers.add(handlers.onState); return () => subscribers.delete(handlers.onState); };
   const documents = {
     set: async (id, data, { metadata }) => { files.set(id, { data, metadata }); },
     getWithMetadata: async id => files.get(id) || null,
     getMetadata: async id => files.has(id) ? { metadata: files.get(id).metadata } : null
   };
   const fileHandler = createDocumentHandler({ documents, adminKey });
-  const meeting = createHandler({ adminKey, documents,
+  const meeting = createHandler({ adminKey, documents, now: () => clock,
     store: { get: async room => states.get(room) || null, setJSON: async (room, state) => { states.set(room, state); } },
     broker: { publish: async (room, state) => { published.push(state); for (const callback of subscribers) callback(state); } }
   });
@@ -99,7 +101,8 @@ async function fixture() {
     assert.equal(response.status, 200);
     return response.arrayBuffer();
   };
-  return { files, states, documents, fileHandler, meeting, uploadFile, request, download, subscribers, published, order, MAX_PDF_BYTES };
+  return { files, states, documents, fileHandler, meeting, uploadFile, request, download, subscribers, published, order, MAX_PDF_BYTES,
+    subscribe, now: () => clock, advance: ms => { clock += ms; } };
 }
 
 test('admin uploads then downloads the exact object before publishing; participants and late joins switch PDFs automatically', async () => {
@@ -111,7 +114,7 @@ test('admin uploads then downloads the exact object before publishing; participa
     subscribe: async (_, handlers) => { f.subscribers.add(handlers.onState); return () => f.subscribers.delete(handlers.onState); },
     showTarget: async state => { const bytes = await f.download(state.document); shown.push({ id: state.documentId, bytes: Buffer.from(bytes).toString(), question: state.questionId }); }
   });
-  const admin = new MeetingSession({ request: f.request, uploadFile: f.uploadFile, getDocument: () => adminDoc,
+  const admin = new MeetingSession({ request: f.request, subscribe: f.subscribe, uploadFile: f.uploadFile, getDocument: () => adminDoc,
     getTarget: () => ({ mode: 'question', questionId: 1 }),
     showDocument: async descriptor => {
       const bytes = await f.download(descriptor);
@@ -146,7 +149,7 @@ test('two admins take turns controlling one participant without uploading the sh
   const f = await fixture();
   const makeAdmin = () => {
     let doc = { ready: false };
-    return new MeetingSession({ request: f.request, uploadFile: f.uploadFile,
+    return new MeetingSession({ request: f.request, subscribe: f.subscribe, now: f.now, uploadFile: f.uploadFile,
       getDocument: () => doc, getTarget: () => ({ mode: 'question', questionId: 1 }),
       showDocument: async descriptor => { await f.download(descriptor); doc = { ready: true, hosted: true, id: descriptor.id, shared: descriptor }; },
       showTarget: async state => { await f.download(state.document); doc = { ready: true, hosted: true, id: state.documentId, shared: state.document }; }
@@ -166,8 +169,10 @@ test('two admins take turns controlling one participant without uploading the sh
   assert.equal(f.order.filter(x=>x==='upload').length, 1);
   await first.navigate({ mode: 'question', questionId: 3 });
   await viewer.applyQueue;
+  f.advance(2000);
   await second.navigate({ mode: 'question', questionId: 7 });
   await viewer.applyQueue;
+  f.advance(2000);
   await first.navigate({ mode: 'question', questionId: 2 });
   await viewer.applyQueue;
   assert.deepEqual(shown, [1,3,7,2]);
@@ -180,7 +185,7 @@ test('two admins take turns controlling one participant without uploading the sh
 test('upload failure or parse failure leaves the active meeting document unchanged', async () => {
   const f = await fixture();
   let current = null;
-  const admin = new MeetingSession({ request: f.request, uploadFile: f.uploadFile, getTarget: () => ({ mode: 'question', questionId: 1 }), getDocument: () => ({ ready: true }), showDocument: async descriptor => { current = descriptor; } });
+  const admin = new MeetingSession({ request: f.request, subscribe: f.subscribe, uploadFile: f.uploadFile, getTarget: () => ({ mode: 'question', questionId: 1 }), getDocument: () => ({ ready: true }), showDocument: async descriptor => { current = descriptor; } });
   await admin.join('room', adminKey);
   await admin.shareFile(pdf('working'));
   const saved = f.states.get('room'), displayed = current;
@@ -223,7 +228,7 @@ test('PDF upload validates credentials, size, content, and room; a stored object
 test('oversize files and concurrent file changes are rejected before replacing the document', async () => {
   let release;
   const pending = new Promise(resolve => { release = resolve; });
-  const admin = new MeetingSession({ request: async () => ({ state: { revision: 'ok' } }), getDocument() {},
+  const admin = new MeetingSession({ request: async () => ({ state: { revision: 'ok' } }), subscribe: async () => () => {}, getDocument() {},
     getTarget: () => ({ mode: 'question', questionId: 1 }), uploadFile: async () => { await pending; return { document: { id: 'a'.repeat(64), fileId: 'test' } }; }, showDocument: async () => {} });
   await admin.join('room', adminKey);
   await assert.rejects(admin.shareFile({ name: 'big.pdf', size: 50000001 }), /50MB/);

@@ -1653,6 +1653,7 @@ async function renderTocPage(pageNum, currentIdx, totalPages, container) {
 }
 
 async function openTocView(autoFit = true, broadcast = true) {
+  if (broadcast && window.MeetingFiles?.canNavigate && !window.MeetingFiles.canNavigate()) return;
   if (!currentPdfDoc) {
     alert("먼저 PDF 문서를 열어주세요.");
     return;
@@ -1714,6 +1715,7 @@ async function openTocView(autoFit = true, broadcast = true) {
 }
 
 async function openQuestion(questionId, autoFit = true, broadcast = true) {
+  if (broadcast && window.MeetingFiles?.canNavigate && !window.MeetingFiles.canNavigate()) return;
   const targetId = Number(questionId);
   const q = currentItems.find(i => Number(i.id) === targetId);
   if (!q) return;

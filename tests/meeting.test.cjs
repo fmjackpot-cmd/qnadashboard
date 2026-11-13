@@ -32,7 +32,7 @@ async function setup() {
       body: body ? JSON.stringify(body) : undefined
     }));
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error);
+    if (!response.ok) throw Object.assign(new Error(result.error), { state: result.state });
     return result;
   };
   const makeClient = (custom = {}) => {
@@ -45,7 +45,7 @@ async function setup() {
       },
       getDocument: () => ({ ready: true, hosted: true, id: documentId }),
       showTarget: async state => shown.push(state.questionId ?? 'toc'),
-      onStatus: (status, message) => statuses.push({ status, message }), ...custom });
+      onStatus: (status, message) => statuses.push({ status, message }), now: () => clock, ...custom });
     return { client, shown, statuses };
   };
   return { createHandler, handler, request, records, store, broker, publications, subscriptions, makeClient, advance: ms => { clock += ms; } };
@@ -224,4 +224,95 @@ test('admin keys of exactly six characters authenticate; shorter keys are reject
   const rejected = await authenticate(five, 'test5');
   assert.equal(rejected.status, 503);
   assert.match((await rejected.json()).error, /6자 이상/);
+});
+
+test('admins follow each other without echoing and the other admin can take over at exactly two seconds', async () => {
+  const { makeClient, advance, publications, request, records } = await setup();
+  const first = makeClient(), second = makeClient(), viewer = makeClient();
+  await first.client.join('room', key);
+  await second.client.join('room', key);
+  await viewer.client.join('room');
+  await first.client.navigate(target(3));
+  await Promise.all([second.client.applyQueue, viewer.client.applyQueue]);
+  assert.deepEqual(first.shown, [], 'the sender does not render its own broadcast again');
+  assert.deepEqual(second.shown, [3]);
+  assert.deepEqual(viewer.shown, [3]);
+  assert.equal(second.client.canNavigate(false), false);
+  assert.equal(second.statuses.at(-1).status, 'cooldown');
+  advance(1999);
+  await second.client.navigate(target(7));
+  assert.equal(publications.length, 1, 'blocked clicks are discarded, not delayed in a queue');
+  await assert.rejects(request('room', { ...target(7), controllerId: second.client.controllerId }, key), /2초/);
+  assert.equal(records.get('room').questionId, 3);
+  advance(1);
+  await second.client.navigate(target(7));
+  await Promise.all([first.client.applyQueue, viewer.client.applyQueue]);
+  assert.deepEqual(first.shown, [7]);
+  assert.deepEqual(second.shown, [3]);
+  assert.deepEqual(viewer.shown, [3, 7]);
+  assert.equal(publications.length, 2);
+  assert.equal(first.client.canNavigate(false), false);
+  assert.equal(second.client.canNavigate(false), true);
+  await second.client.navigate(target(8));
+  await first.client.applyQueue;
+  assert.deepEqual(first.shown, [7, 8], 'the current controller can continue navigating');
+  first.client.leave(); second.client.leave(); viewer.client.leave();
+});
+
+test('administrator reconnect receives the latest missed move and leaving clears the lock', async () => {
+  const { makeClient, request, advance } = await setup();
+  const admin = makeClient();
+  await admin.client.join('room', key);
+  await request('room', { ...target(4), controllerId: 'another-admin' }, key);
+  await admin.client.applyQueue;
+  assert.equal(admin.client.canNavigate(false), false);
+  advance(2000);
+  admin.client.stopSubscription();
+  await request('room', { ...target(9), controllerId: 'another-admin' }, key);
+  await admin.client.sync();
+  assert.deepEqual(admin.shown, [4, 9]);
+  assert.equal(admin.statuses.at(-1).status, 'cooldown');
+  admin.client.leave();
+  assert.equal(admin.client.canNavigate(false), true);
+  await admin.client.join('another-room', key);
+  assert.equal(admin.client.canNavigate(false), true);
+  admin.client.leave();
+});
+
+test('conditional writes reject simultaneous admins without overwriting or broadcasting the losing move', async () => {
+  const { createHandler } = await import('../netlify/functions/meeting.mjs');
+  let stored = null, etag = 0, published = 0, reads = 0, release, clock = 1000;
+  let bothRead = new Promise(resolve => { release = resolve; });
+  const handler = createHandler({ adminKey: key, now: () => clock, broker: { publish: async () => { published++; } },
+    store: {
+      get: async () => stored,
+      getWithMetadata: async () => {
+        const snapshot = stored && { data: stored, etag: String(etag) };
+        if (++reads === 2) release();
+        await bothRead;
+        return snapshot;
+      },
+      setJSON: async (_, state, options) => {
+        if ((options.onlyIfNew && stored) || (options.onlyIfMatch && options.onlyIfMatch !== String(etag))) return { modified: false };
+        stored = state; etag++;
+        return { modified: true };
+      }
+    }
+  });
+  const send = controllerId => handler(new Request('https://meeting.example/?room=room', {
+    method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: JSON.stringify({ ...target(1), controllerId })
+  }));
+  const responses = await Promise.all([send('admin-one'), send('admin-two')]);
+  assert.deepEqual(responses.map(r => r.status).sort(), [200, 409]);
+  assert.equal(published, 1);
+  assert.equal(stored.sequence, 1);
+  const conflict = await responses.find(r => r.status === 409).json();
+  assert.equal(conflict.state.controllerId, stored.controllerId);
+  clock += 2000;
+  reads = 0;
+  bothRead = new Promise(resolve => { release = resolve; });
+  const updates = await Promise.all([send('admin-one'), send('admin-two')]);
+  assert.deepEqual(updates.map(r => r.status).sort(), [200, 409], 'an existing room also requires a matching ETag');
+  assert.equal(published, 2);
+  assert.equal(stored.sequence, 2);
 });
