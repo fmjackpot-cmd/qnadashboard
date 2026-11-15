@@ -1,5 +1,6 @@
 import http from 'node:http';
 import fs from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
@@ -10,6 +11,14 @@ import { createDocumentHandler, MAX_PDF_BYTES } from '../netlify/lib/meeting-doc
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const launcherId = createHash('sha256').update(root).digest('hex');
+// Identify the code loaded by this process, not the static files served from disk.
+// A rebuild can update the UI while an existing process still holds old handlers.
+const serverVersion = createHash('sha256');
+for (const file of ['scripts/local-server.mjs', 'netlify/functions/meeting.mjs', 'netlify/functions/meeting-document.mjs',
+  'netlify/lib/meeting-documents.mjs', 'netlify/lib/meeting-ably.mjs']) {
+  serverVersion.update(file).update(readFileSync(path.join(root, file)));
+}
+const loadedServerVersion = serverVersion.digest('hex');
 const contentTypes = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.pdf': 'application/pdf' };
 
@@ -56,7 +65,7 @@ export function createLocalServer({ publishDirectory = path.join(root, 'netlify-
       const url = new URL(request.url, `http://${request.headers.host}`);
       if (url.pathname === '/__local/health') {
         response.setHeader('Content-Type', 'application/json; charset=utf-8');
-        response.end(JSON.stringify({ ok: true, application: 'question-dashboard', launcherId,
+        response.end(JSON.stringify({ ok: true, application: 'question-dashboard', launcherId, serverVersion: loadedServerVersion,
           realtimeConfigured: missing.length === 0, missing }));
         return;
       }
@@ -124,6 +133,12 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
         const response = await fetch(`http://127.0.0.1:${port}/__local/health`, { signal: AbortSignal.timeout(2000) });
         const health = response.ok ? await response.json() : null;
         if (health?.ok && health.application === 'question-dashboard' && health.launcherId === launcherId) {
+          if (health.serverVersion !== loadedServerVersion) {
+            console.error('The running dashboard uses outdated server code. Stop its terminal (Ctrl+C), then run run-app.bat again.');
+            console.error('Local meeting data is in memory. Upload the meeting PDF again after restarting.');
+            process.exitCode = 1;
+            return;
+          }
           console.log(`Reusing the running dashboard: http://localhost:${port}`);
           console.log('The existing server keeps the current meeting state. Close its terminal to stop it.');
           openAppWindow();

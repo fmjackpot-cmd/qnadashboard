@@ -5,6 +5,15 @@ const { MeetingSession, uploadPdfParts } = require('../live-session.js');
 const adminKey = 'test06';
 const pdf = name => new File([`%PDF-1.7\n${name}\n%%EOF`], `${name}.pdf`, { type: 'application/pdf' });
 
+test('legacy upload handlers explain server restart or Functions deployment instead of blaming a valid image', async () => {
+  const file = new File([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])], 'screenshot.png', { type: 'image/png' });
+  for (const [host, explanation] of [['localhost:8888', /Ctrl\+C/], ['dashboard.test', /Functions/]]) {
+    await assert.rejects(uploadPdfParts({ room: 'room', file, key: adminKey, purpose: 'message',
+      endpoint: `http://${host}/.netlify/functions/meeting-document`,
+      fetcher: async () => new Response(JSON.stringify({ error: '올바른 PDF 파일을 선택해주세요.' }), { status: 400 }) }), explanation);
+  }
+});
+
 test('25MB PDF transfers in bounded requests, preserves its mode, and verifies the reconstructed bytes', async () => {
   const f = await fixture();
   const bytes = Buffer.alloc(25_000_000, 42);

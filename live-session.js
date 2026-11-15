@@ -9,6 +9,12 @@
         headers: { Authorization: `Bearer ${key}`, ...(purpose ? { 'X-Document-Purpose': purpose } : {}), ...headers } });
       let result;
       try { result = await response.json(); } catch { throw new Error('업로드 응답을 확인하지 못했습니다. 다시 시도해주세요.'); }
+      if (!response.ok && purpose === 'message' && file.type.startsWith('image/') && result.error === '올바른 PDF 파일을 선택해주세요.') {
+        const local = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(target).hostname);
+        throw new Error(local
+          ? '실행 중인 로컬 서버가 이미지 첨부 이전 버전입니다. 서버 창에서 Ctrl+C로 종료한 뒤 run-app.bat을 다시 실행해주세요. 재시작하면 회의 PDF를 다시 업로드해야 합니다.'
+          : '사이트 화면과 서버 함수의 버전이 다릅니다. 이미지 첨부를 지원하는 최신 Functions를 화면과 함께 배포해주세요.');
+      }
       if (!response.ok) throw new Error(result.error || 'PDF 업로드에 실패했습니다.');
       return result;
     };
@@ -366,6 +372,7 @@
     const composeDialog = el('meeting-compose-dialog');
     const messageForm = el('meeting-message-form');
     const messageText = el('meeting-message-text');
+    messageText.required = false;
     const messageFeedback = el('meeting-message-feedback');
     const mediaView = root.MessageMedia?.createAttachmentView({ container: el('meeting-message-media'), dialog: messageDialog,
       endpoint: root.DASHBOARD_CONFIG?.meetingDocumentEndpoint || '/.netlify/functions/meeting-document' });

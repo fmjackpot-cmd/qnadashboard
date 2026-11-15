@@ -31,6 +31,7 @@ test('local launcher serves only the built dashboard and runs the real meeting h
   assert.equal(health.ok, true);
   assert.equal(health.application, 'question-dashboard');
   assert.match(health.launcherId, /^[a-f0-9]{64}$/);
+  assert.match(health.serverVersion, /^[a-f0-9]{64}$/);
   assert.equal(health.realtimeConfigured, true);
   assert.deepEqual(health.missing, []);
   assert.ok(!JSON.stringify(health).includes('fake-secret'));
@@ -57,6 +58,20 @@ test('local launcher serves only the built dashboard and runs the real meeting h
     body: JSON.stringify({ ...move, documentId: document.id, fileId: document.fileId, action: 'set-document' }) });
   assert.equal(switchResponse.status, 200);
   assert.equal((await switchResponse.json()).state.document.fileId, document.fileId);
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jO1kAAAAASUVORK5CYII=', 'base64');
+  const imageUpload = await fetch(base + '/.netlify/functions/meeting-document?room=local-room', {
+    method: 'POST', headers: { Authorization: `Bearer ${adminKey}`, 'X-Document-Purpose': 'message',
+      'Content-Type': 'image/png', 'X-Pdf-Name': 'screenshot.png' }, body: png
+  });
+  assert.equal(imageUpload.status, 201, 'a fresh local server accepts PNG message attachments over HTTP');
+  const image = (await imageUpload.json()).document;
+  assert.equal(image.mediaType, 'image/png');
+  const message = await fetch(endpoint, { method: 'POST', headers: { Authorization: `Bearer ${adminKey}` },
+    body: JSON.stringify({ action: 'send-message', text: '', attachmentId: image.fileId }) });
+  assert.equal(message.status, 200);
+  assert.equal((await message.json()).message.attachment.fileId, image.fileId);
+  assert.deepEqual(Buffer.from(await (await fetch(base + image.url)).arrayBuffer()), png);
+  assert.equal((await (await fetch(endpoint)).json()).state.document.fileId, document.fileId);
 });
 
 test('missing local keys are reported by name without exposing values', async t => {
@@ -115,5 +130,29 @@ test('launcher refuses a port owned by another application or another checkout',
     assert.equal(result.code, 1, result.output);
     assert.match(result.output, /already in use/);
     assert.equal((await fetch(`http://127.0.0.1:${port}`)).status, 200);
+  }
+});
+
+test('launcher refuses legacy or outdated handlers in the same checkout without stopping the existing meeting', async t => {
+  const { createLocalServer } = await import('../scripts/local-server.mjs');
+  const http = require('node:http');
+  const { server: current } = createLocalServer({ env: {} });
+  t.after(() => new Promise(resolve => current.close(resolve)));
+  await new Promise(resolve => current.listen(0, '127.0.0.1', resolve));
+  const health = await (await fetch(`http://127.0.0.1:${current.address().port}/__local/health`)).json();
+  let advertised = { ...health };
+  const old = http.createServer((request, response) => {
+    response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(advertised));
+  });
+  t.after(() => new Promise(resolve => old.close(resolve)));
+  await new Promise(resolve => old.listen(0, '127.0.0.1', resolve));
+  for (const version of [undefined, 'outdated']) {
+    advertised.serverVersion = version;
+    const result = await runLauncher(old.address().port);
+    assert.equal(result.code, 1, result.output);
+    assert.match(result.output, /outdated server code/);
+    assert.match(result.output, /Ctrl\+C/);
+    assert(!result.output.includes('Reusing'));
+    assert.equal((await fetch(`http://127.0.0.1:${old.address().port}/__local/health`)).status, 200);
   }
 });
