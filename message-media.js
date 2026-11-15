@@ -9,6 +9,11 @@
     return { width, center };
   }
 
+  function popupVerticalGeometry(viewportHeight, contentTop = 0) {
+    const top = Math.max(12, Math.min(contentTop + 12, viewportHeight - 120));
+    return { top, maxHeight: Math.max(0, viewportHeight - top - 12) };
+  }
+
   function positionMessageDialog(dialog, environment = root) {
     const viewportWidth = environment.innerWidth;
     const pages = Array.from(environment.document.querySelectorAll('.pdf-page-card canvas'));
@@ -18,6 +23,10 @@
     const geometry = popupGeometry(page, viewportWidth);
     dialog.style.setProperty('--message-width', `${geometry.width}px`);
     dialog.style.setProperty('--message-center', `${geometry.center}px`);
+    const contentTop = environment.document.querySelector('.pdf-viewport')?.getBoundingClientRect().top || 0;
+    const vertical = popupVerticalGeometry(environment.innerHeight, contentTop);
+    dialog.style.setProperty('--message-top', `${vertical.top}px`);
+    dialog.style.setProperty('--message-max-height', `${vertical.maxHeight}px`);
   }
 
   async function prepareMessageFile(file, { environment = root } = {}) {
@@ -95,7 +104,7 @@
       objectUrl = null;
       container.replaceChildren();
       container.hidden = true;
-      dialog.classList.remove('has-attachment', 'media-expanded');
+      dialog.classList.remove('has-attachment');
     };
     const show = async attachment => {
       clear();
@@ -130,23 +139,33 @@
         const link = make('a', attachment.name || '첨부 다운로드');
         link.href = objectUrl; link.download = attachment.name || 'attachment';
         controls.append(link);
-        const zoom = make('button', '확대'); zoom.type = 'button';
-        zoom.setAttribute('aria-pressed', 'false');
-        const toggle = () => {
-          const expanded = dialog.classList.toggle('media-expanded');
-          zoom.textContent = expanded ? '축소' : '확대';
-          zoom.setAttribute('aria-pressed', String(expanded));
-        };
-        zoom.onclick = toggle; controls.append(zoom);
+        const smaller = make('button', '−'), larger = make('button', '+'), fit = make('button', '너비 맞춤');
+        const zoomLabel = make('span', '100%');
+        zoomLabel.setAttribute('aria-live', 'polite');
+        smaller.type = larger.type = fit.type = 'button';
+        smaller.setAttribute('aria-label', '첨부 축소'); larger.setAttribute('aria-label', '첨부 확대');
+        controls.append(smaller, zoomLabel, larger, fit);
         const stage = make('div', null, 'message-media-stage');
+        const surface = make('div', null, 'message-media-surface');
+        stage.append(surface);
+        let zoom = 100;
+        const setZoom = value => {
+          zoom = Math.max(50, Math.min(200, value));
+          surface.style.width = `${zoom}%`;
+          zoomLabel.textContent = `${zoom}%`;
+          smaller.disabled = zoom === 50; larger.disabled = zoom === 200;
+          if (zoom === 100) { stage.scrollLeft = 0; stage.scrollTop = 0; }
+        };
+        smaller.onclick = () => setZoom(zoom - 25);
+        larger.onclick = () => setZoom(zoom + 25);
+        fit.onclick = () => setZoom(100);
+        setZoom(100);
         container.replaceChildren(controls, stage);
         if (attachment.mediaType.startsWith('image/')) {
           const image = make('img');
           image.alt = attachment.name || '관리자가 보낸 이미지';
           image.src = objectUrl;
-          const button = make('button', null, 'message-image-toggle');
-          button.type = 'button'; button.setAttribute('aria-label', '이미지 확대 또는 축소');
-          button.onclick = toggle; button.append(image); stage.append(button);
+          surface.append(image);
           image.onerror = () => { if (current === generation) { status.textContent = '이미지를 표시하지 못했습니다.'; stage.replaceChildren(status, retry); } };
         } else {
           if (!environment.pdfjsLib) throw new Error('PDF 뷰어를 불러오지 못했습니다. 새로고침 후 다시 시도해주세요.');
@@ -157,7 +176,7 @@
           const previous = make('button', '이전 쪽'), next = make('button', '다음 쪽'), label = make('span');
           previous.type = next.type = 'button';
           controls.append(previous, label, next);
-          const canvas = make('canvas'); stage.append(canvas);
+          const canvas = make('canvas'); surface.append(canvas);
           const render = async number => {
             if (rendering || current !== generation) return;
             rendering = true; previous.disabled = next.disabled = true;
@@ -178,7 +197,6 @@
             }
           };
           previous.onclick = () => render(pageNumber - 1); next.onclick = () => render(pageNumber + 1);
-          canvas.onclick = toggle;
           await render(1);
         }
       } catch (error) {
@@ -190,7 +208,7 @@
     return { show, clear };
   }
 
-  const api = { prepareMessageFile, downloadAttachment, createAttachmentView, popupGeometry, positionMessageDialog };
+  const api = { prepareMessageFile, downloadAttachment, createAttachmentView, popupGeometry, popupVerticalGeometry, positionMessageDialog };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.MessageMedia = api;
 })(typeof window !== 'undefined' ? window : globalThis);

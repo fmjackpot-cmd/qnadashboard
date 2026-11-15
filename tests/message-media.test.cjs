@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { createHash, webcrypto } = require('node:crypto');
-const { prepareMessageFile, downloadAttachment, popupGeometry, createAttachmentView } = require('../message-media.js');
+const { prepareMessageFile, downloadAttachment, popupGeometry, popupVerticalGeometry, positionMessageDialog, createAttachmentView } = require('../message-media.js');
 
 test('photo preparation scales without upscaling, selects a smaller encoded image and releases its bitmap', async () => {
   const drawn = [], dimensions = [];
@@ -60,7 +60,7 @@ function dom() {
   const nodes = [];
   const createElement = tag => {
     const classes = new Set();
-    const node = { tag, children: [], attributes: {}, classList: {
+    const node = { tag, children: [], attributes: {}, style: {}, classList: {
       add: (...names) => names.forEach(name => classes.add(name)), remove: (...names) => names.forEach(name => classes.delete(name)),
       toggle: name => { if (classes.has(name)) { classes.delete(name); return false; } classes.add(name); return true; }, contains: name => classes.has(name)
     }, setAttribute(name, value) { this.attributes[name] = value; }, append(...items) { this.children.push(...items); },
@@ -70,7 +70,7 @@ function dom() {
   return { nodes, createElement };
 }
 
-test('image popup toggles enlargement and dismiss releases object URLs and hides the attachment', async () => {
+test('image starts at popup width and buttons adjust in bounded steps without image-click enlargement', async () => {
   const { nodes, createElement } = dom();
   const bytes = Buffer.from('image bytes');
   const revoked = [];
@@ -80,9 +80,22 @@ test('image popup toggles enlargement and dismiss releases object URLs and hides
   const view = createAttachmentView({ dialog, container, environment, endpoint: 'https://test.example/media' });
   await view.show({ id: createHash('sha256').update(bytes).digest('hex'), size: bytes.length,
     mediaType: 'image/png', name: 'photo.png', url: 'https://test.example/media?file=test' });
-  const toggle = nodes.find(node => node.className === 'message-image-toggle');
-  assert(toggle); toggle.onclick(); assert(dialog.classList.contains('media-expanded'));
-  toggle.onclick(); assert(!dialog.classList.contains('media-expanded'));
+  const surface = nodes.find(node => node.className === 'message-media-surface');
+  const smaller = nodes.find(node => node.attributes['aria-label'] === '첨부 축소');
+  const larger = nodes.find(node => node.attributes['aria-label'] === '첨부 확대');
+  const fit = nodes.find(node => node.textContent === '너비 맞춤');
+  const stage = nodes.find(node => node.className === 'message-media-stage');
+  assert.equal(surface.style.width, '100%');
+  larger.onclick(); assert.equal(surface.style.width, '125%');
+  for (let i = 0; i < 10; i++) larger.onclick();
+  assert.equal(surface.style.width, '200%'); assert.equal(larger.disabled, true);
+  smaller.onclick(); assert.equal(surface.style.width, '175%');
+  for (let i = 0; i < 10; i++) smaller.onclick();
+  assert.equal(surface.style.width, '50%'); assert.equal(smaller.disabled, true);
+  stage.scrollTop = 500; stage.scrollLeft = 100;
+  fit.onclick(); assert.equal(surface.style.width, '100%');
+  assert.equal(stage.scrollTop, 0); assert.equal(stage.scrollLeft, 0);
+  assert.equal(nodes.find(node => node.tag === 'img').onclick, undefined);
   assert.equal(nodes.find(node => node.tag === 'img').src, 'blob:test');
   view.clear(); assert.equal(container.hidden, true); assert.deepEqual(revoked, ['blob:test']);
 });
@@ -102,8 +115,31 @@ test('PDF popup renders only the selected page, supports page navigation and des
     mediaType: 'application/pdf', name: 'test.pdf', url: 'https://test.example/media?file=test' });
   assert.deepEqual(rendered, [1]);
   const next = nodes.find(node => node.textContent === '다음 쪽');
+  const surface = nodes.find(node => node.className === 'message-media-surface');
+  nodes.find(node => node.attributes['aria-label'] === '첨부 확대').onclick();
   await next.onclick(); assert.deepEqual(rendered, [1, 2]);
+  assert.equal(surface.style.width, '125%', 'page changes retain the selected width scale');
   view.clear(); assert.equal(destroyed, 1);
+});
+
+test('popup top stays anchored below the PDF toolbar and its maximum height leaves a bottom margin', () => {
+  assert.deepEqual(popupVerticalGeometry(1080, 58), { top: 70, maxHeight: 998 });
+  for (const [height, contentTop] of [[844, 60], [360, 58], [240, 180]]) {
+    const { top, maxHeight } = popupVerticalGeometry(height, contentTop);
+    assert(top >= 12);
+    assert.equal(top + maxHeight, height - 12);
+  }
+  const properties = {};
+  const dialog = { style: { setProperty: (name, value) => { properties[name] = value; } } };
+  const environment = { innerWidth: 1920, innerHeight: 1080, document: {
+    querySelectorAll: () => [{ getBoundingClientRect: () => ({ left: 400, width: 1200, top: 70, bottom: 1600 }) }],
+    querySelector: selector => selector === '.pdf-viewport' ? { getBoundingClientRect: () => ({ top: 58 }) } : null
+  } };
+  positionMessageDialog(dialog, environment);
+  assert.equal(properties['--message-top'], '70px');
+  assert.equal(properties['--message-max-height'], '998px');
+  assert.equal(properties['--message-width'], '1056px');
+  assert.equal(properties['--message-center'], '1000px');
 });
 
 test('closing during download prevents an old attachment from appearing after the next message', async () => {
