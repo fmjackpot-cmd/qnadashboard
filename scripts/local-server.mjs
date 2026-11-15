@@ -19,6 +19,8 @@ export function createLocalServer({ publishDirectory = path.join(root, 'netlify-
   const recordVersions = new Map();
   const files = new Map();
   const documents = {
+    list: async () => ({ blobs: [...files.keys()].map(key => ({ key })) }),
+    delete: async id => { files.delete(id); },
     set: async (id, data, { metadata }) => { files.set(id, { data, metadata }); },
     getWithMetadata: async id => files.get(id) || null,
     getMetadata: async id => files.has(id) ? { metadata: files.get(id).metadata } : null
@@ -31,7 +33,8 @@ export function createLocalServer({ publishDirectory = path.join(root, 'netlify-
     catch { missing.push('ABLY_API_KEY'); }
   }
   const adminKey = missing.includes('MEETING_ADMIN_KEY') ? '' : env.MEETING_ADMIN_KEY;
-  const documentHandler = createDocumentHandler({ documents, adminKey });
+  const documentHandler = createDocumentHandler({ documents, adminKey,
+    meetings: { get: async room => records.get(room) || null } });
   const handler = createHandler({ documents, adminKey,
     broker: missing.includes('ABLY_API_KEY') ? null : broker,
     store: {

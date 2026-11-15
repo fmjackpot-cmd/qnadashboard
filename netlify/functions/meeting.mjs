@@ -1,5 +1,12 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { documentInfo, validFileId } from '../lib/meeting-documents.mjs';
+import { documentInfo, validFileId, DOCUMENT_RETENTION_MS } from '../lib/meeting-documents.mjs';
+
+// Includes token/snapshot reads and admin writes. Allow five clients behind one
+// office IP ample headroom; enforce at the edge without per-request Blob writes.
+export const config = {
+  path: '/.netlify/functions/meeting',
+  rateLimit: { windowLimit: 300, windowSize: 60, aggregateBy: ['ip', 'domain'] }
+};
 
 const json = (data, status = 200) => new Response(JSON.stringify(data), {
   status,
@@ -74,6 +81,9 @@ export function createHandler({ store, documents, adminKey, broker, now = Date.n
         if (!documents || !validFileId(body.fileId)) return json({ error: '먼저 회의 자료를 업로드해주세요.' }, 400);
         const entry = await documents.getMetadata(body.fileId, { consistency: 'strong' });
         if (!entry || entry.metadata.room !== room || entry.metadata.id !== body.documentId) return json({ error: '업로드한 회의 자료가 일치하지 않습니다.' }, 400);
+        if (previous?.document?.fileId !== body.fileId && now() - entry.metadata.createdAt >= DOCUMENT_RETENTION_MS) {
+          return json({ error: '오래된 업로드입니다. PDF를 다시 업로드해주세요.' }, 410);
+        }
         document = documentInfo(room, body.fileId, entry.metadata);
       } else if (document && document.id !== body.documentId) {
         return json({ error: '회의 자료로 업로드한 PDF에서 문항을 선택해주세요.' }, 409);

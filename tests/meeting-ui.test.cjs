@@ -29,7 +29,7 @@ test('meeting form authenticates, clears the key field, and shares a viewer URL 
     document: doc, location, URL, AbortSignal,
     history: { replaceState: (_, __, url) => { location.href = String(url); } },
     navigator: { clipboard: { writeText: async text => { copied = text; } } },
-    setTimeout: () => 1, clearTimeout() {},
+    setTimeout, clearTimeout,
     Ably: { Realtime: class {
       constructor() {
         this.connection = { on() {}, off() {} };
@@ -140,6 +140,12 @@ test('meeting form authenticates, clears the key field, and shares a viewer URL 
   assert.equal(popup.open, true);
   elements.get('meeting-message-close').onclick();
   assert.equal(popup.open, false);
+  elements.get('meeting-leave').onclick();
+  context.fetch = async () => ({ ok: false, status: 429, json: async () => { throw new Error('plain text edge response'); } });
+  elements.get('start-viewer').onclick();
+  elements.get('meeting-room').value = 'audit-2026';
+  await elements.get('meeting-form').onsubmit({ preventDefault() {} });
+  assert.match(elements.get('meeting-error').textContent, /요청이 너무 잦습니다/);
 });
 
 function appContext() {
@@ -256,7 +262,8 @@ test('dashboard assembles chunk downloads, applies the shared document type and 
     name: 'receipt.pdf', documentType: 'receipt', parts: 3, size: bytes.length,
     url: '/.netlify/functions/meeting-document?room=test&file=12345678-1234-1234-1234-123456789abc' };
   const parts = [];
-  context.fetch = async url => {
+  context.fetch = async (url, options) => {
+    assert.equal(options.cache, 'default', 'PDF parts can reuse the private browser HTTP cache');
     const part = Number(url.searchParams.get('part'));
     parts.push(part);
     const chunk = bytes.subarray(part * 3000000, (part + 1) * 3000000);

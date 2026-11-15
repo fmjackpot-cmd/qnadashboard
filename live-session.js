@@ -43,6 +43,7 @@
       this.active = false;
       this.lastRevision = null;
       this.sendQueue = Promise.resolve();
+      this.navigationRevision = 0;
       this.applyQueue = Promise.resolve();
     }
 
@@ -235,9 +236,13 @@
         this.onStatus('error', '먼저 PDF를 회의 자료로 업로드해주세요.');
         return Promise.resolve();
       }
-      // Serialize writes so a slow earlier request cannot overwrite a later move.
+      // Start all debounce waits immediately; queued obsolete selections are skipped.
+      // Keep writes serialized so an in-flight move cannot overwrite the final one.
+      const selection = ++this.navigationRevision;
+      const settled = new Promise(resolve => setTimeout(resolve, 150));
       this.sendQueue = this.sendQueue.catch(() => {}).then(async () => {
-        if (generation !== this.generation) return;
+        await settled;
+        if (generation !== this.generation || selection !== this.navigationRevision) return;
         if (!this.canNavigate()) return;
         this.onStatus('sending');
         try {
@@ -385,6 +390,7 @@
         body: body ? JSON.stringify(body) : undefined,
         signal: AbortSignal.timeout(15000)
       });
+      if (response.status === 429) throw new Error('회의 요청이 너무 잦습니다. 잠시 후 다시 연결하거나 전송해주세요.');
       let result;
       try { result = await response.json(); } catch { throw new Error('회의 서버가 없습니다. Functions를 포함해 Netlify에 배포해주세요.'); }
       if (!response.ok) {

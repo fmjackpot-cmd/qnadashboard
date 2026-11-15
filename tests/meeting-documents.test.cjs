@@ -30,6 +30,7 @@ test('25MB PDF transfers in bounded requests, preserves its mode, and verifies t
     url.searchParams.set('part', part);
     const response = await f.fileHandler(new Request(url));
     assert.equal(response.status, 200);
+    assert.equal(response.headers.get('cache-control'), 'private, max-age=86400, immutable');
     chunks.push(Buffer.from(await response.arrayBuffer()));
     url.searchParams.set('room', 'other');
     assert.equal((await f.fileHandler(new Request(url))).status, 404);
@@ -40,6 +41,82 @@ test('25MB PDF transfers in bounded requests, preserves its mode, and verifies t
   assert.equal(f.published[0].document.documentType, 'receipt');
   assert.equal(f.published[0].document.parts, 9);
   assert(progress.length >= 9);
+  const mutate = `https://dashboard.test/.netlify/functions/meeting-document?room=receipt&action=part&upload=${document.fileId}&part=0`;
+  assert.equal((await f.fileHandler(new Request(mutate, { method: 'POST',
+    headers: { Authorization: `Bearer ${adminKey}` }, body: bytes.subarray(0, 3_000_000) }))).status, 409);
+});
+
+test('next upload removes stale unused PDFs and failed chunks, preserving active, recent and other-room files', async () => {
+  const f = await fixture();
+  const { DOCUMENT_RETENTION_MS } = await import('../netlify/lib/meeting-documents.mjs');
+  const upload = name => f.uploadFile('room', pdf(name), adminKey);
+  const active = (await upload('active')).document;
+  const old = (await upload('old')).document;
+  const other = (await f.uploadFile('other', pdf('other'), adminKey)).document;
+  await f.request('room', { action: 'set-document', fileId: active.fileId, documentId: active.id, mode: 'question', questionId: 1 }, adminKey);
+  // Include completed multipart metadata and an abandoned upload.
+  const abandoned = '11111111-1111-1111-1111-111111111111';
+  const completed = '22222222-2222-2222-2222-222222222222';
+  for (const fileId of [abandoned, completed]) {
+    f.files.set(`${fileId}/pending`, { metadata: { room: 'room', createdAt: f.now() }, data: new ArrayBuffer(0) });
+    f.files.set(`${fileId}/part/0`, { metadata: { room: 'room' }, data: new ArrayBuffer(1) });
+  }
+  f.files.set(completed, f.files.get(`${completed}/pending`));
+  f.advance(DOCUMENT_RETENTION_MS + 1);
+  await assert.rejects(f.request('room', { action: 'set-document', fileId: old.fileId, documentId: old.id,
+    mode: 'question', questionId: 2 }, adminKey), /오래된 업로드/);
+  const recent = (await upload('recent')).document;
+  assert(f.files.has(active.fileId), 'active PDF survives even an expired meeting snapshot');
+  assert(f.files.has(other.fileId), 'other rooms are untouched');
+  assert(f.files.has(recent.fileId));
+  assert(!f.files.has(old.fileId));
+  for (const fileId of [abandoned, completed]) {
+    assert(![...f.files.keys()].some(key => key.startsWith(fileId)));
+  }
+  const next = (await upload('next')).document;
+  assert(f.files.has(recent.fileId));
+  assert(f.files.has(next.fileId));
+  assert.equal(f.states.get('room').document.fileId, active.fileId);
+});
+
+test('cleanup failure does not block a new upload or change the active document', async t => {
+  const f = await fixture();
+  const original = (await f.uploadFile('room', pdf('original'), adminKey)).document;
+  await f.request('room', { action: 'set-document', fileId: original.fileId, documentId: original.id,
+    mode: 'question', questionId: 1 }, adminKey);
+  const warnings = t.mock.method(console, 'warn', () => {});
+  f.documents.list = async () => { throw new Error('list unavailable'); };
+  const next = (await f.uploadFile('room', pdf('new'), adminKey)).document;
+  assert(f.files.has(next.fileId));
+  assert(f.files.has(original.fileId));
+  assert.equal(f.states.get('room').document.fileId, original.fileId);
+  assert.equal(warnings.mock.callCount(), 1);
+});
+
+test('cleanup uses metadata only, keeps unexpired uploads and retries interrupted deletion', async () => {
+  const { cleanupDocuments, DOCUMENT_RETENTION_MS } = await import('../netlify/lib/meeting-documents.mjs');
+  const expired = '33333333-3333-3333-3333-333333333333';
+  const recent = '44444444-4444-4444-4444-444444444444';
+  const files = new Map([
+    [`${expired}/pending`, { room: 'room', createdAt: 1 }],
+    [`${expired}/part/0`, { room: 'room' }],
+    [`${recent}/pending`, { room: 'room', createdAt: DOCUMENT_RETENTION_MS }],
+    [`${recent}/part/0`, { room: 'room' }]
+  ]);
+  let failed = false;
+  const options = { room: 'room', now: () => DOCUMENT_RETENTION_MS + 1,
+    meetings: { get: async () => null }, documents: {
+      list: async () => ({ blobs: [...files.keys()].map(key => ({ key })) }),
+      getMetadata: async key => ({ metadata: files.get(key) }),
+      delete: async key => {
+        if (!failed) { failed = true; throw new Error('temporary storage failure'); }
+        files.delete(key);
+      }
+    } };
+  await assert.rejects(cleanupDocuments(options), /temporary/);
+  assert(files.has(`${expired}/pending`));
+  await cleanupDocuments(options);
+  assert.deepEqual([...files.keys()], [`${recent}/pending`, `${recent}/part/0`]);
 });
 
 test('incomplete, corrupt, expired, and unauthorized chunk uploads cannot become active documents', async () => {
@@ -69,11 +146,14 @@ async function fixture() {
   let clock = Date.now();
   const subscribe = async (_, handlers) => { subscribers.add(handlers.onState); return () => subscribers.delete(handlers.onState); };
   const documents = {
+    list: async () => ({ blobs: [...files.keys()].map(key => ({ key })) }),
+    delete: async id => { files.delete(id); },
     set: async (id, data, { metadata }) => { files.set(id, { data, metadata }); },
     getWithMetadata: async id => files.get(id) || null,
     getMetadata: async id => files.has(id) ? { metadata: files.get(id).metadata } : null
   };
-  const fileHandler = createDocumentHandler({ documents, adminKey });
+  const fileHandler = createDocumentHandler({ documents, adminKey, now: () => clock,
+    meetings: { get: async room => states.get(room) || null } });
   const meeting = createHandler({ adminKey, documents, now: () => clock,
     store: { get: async room => states.get(room) || null, setJSON: async (room, state) => { states.set(room, state); } },
     broker: { publish: async (room, state) => { published.push(state); for (const callback of subscribers) callback(state); } }
@@ -217,7 +297,7 @@ test('PDF upload validates credentials, size, content, and room; a stored object
   assert.equal(f.states.size, 0);
   const stored = await f.fileHandler(new Request('https://dashboard.test' + document.url));
   assert.equal(stored.headers.get('content-type'), 'application/pdf');
-  assert.equal(stored.headers.get('cache-control'), 'no-store');
+  assert.equal(stored.headers.get('cache-control'), 'private, max-age=86400, immutable');
   assert.equal((await f.fileHandler(new Request(`https://dashboard.test/.netlify/functions/meeting-document?room=other&file=${document.fileId}`))).status, 404);
   assert.equal((await f.fileHandler(new Request('https://dashboard.test/.netlify/functions/meeting-document?room=room&file=../../.env'))).status, 404);
   await assert.rejects(f.request('other', { action: 'set-document', fileId: document.fileId, documentId: document.id, mode: 'question', questionId: 1 }, adminKey), /일치/);

@@ -3,6 +3,10 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 export const MAX_PDF_BYTES = 4_500_000;
 export const MAX_DOCUMENT_BYTES = 50_000_000;
 export const PART_BYTES = 3_000_000;
+export const DOCUMENT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const PENDING_RETENTION_MS = 24 * 60 * 60 * 1000;
+// File IDs are immutable. Cache only in the user's browser, never on a shared CDN.
+const pdfCache = 'private, max-age=86400, immutable';
 export const validFileId = value => typeof value === 'string' && /^[a-f0-9-]{36}$/.test(value);
 const json = (value, status = 200) => new Response(JSON.stringify(value), { status,
   headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
@@ -11,7 +15,32 @@ export const documentInfo = (room, fileId, metadata) => ({ id: metadata.id, file
   documentType: metadata.documentType || 'questions', ...(metadata.parts ? { parts: metadata.parts, size: metadata.size } : {}),
   url: `/.netlify/functions/meeting-document?room=${encodeURIComponent(room)}&file=${fileId}` });
 
-export function createDocumentHandler({ documents, adminKey, now = Date.now, createId = randomUUID }) {
+// Run only when a new upload starts, not on reads, navigation, or a daily timer.
+// Retain the current PDF even when its meeting snapshot has expired.
+export async function cleanupDocuments({ documents, meetings, room, now = Date.now }) {
+  const { blobs } = await documents.list();
+  const keys = new Set(blobs.map(blob => blob.key));
+  const candidates = blobs.filter(({ key }) => validFileId(key) || (key.endsWith('/pending') && validFileId(key.slice(0, -8))));
+  const state = await meetings.get(room, { type: 'json', consistency: 'strong' });
+  for (const { key } of candidates) {
+    const fileId = key.split('/')[0];
+    if (fileId === state?.document?.fileId) continue;
+    // A completed multipart document owns its pending marker and all its parts.
+    if (key.endsWith('/pending') && keys.has(fileId)) continue;
+    const entry = await documents.getMetadata(key, { consistency: 'strong' });
+    const metadata = entry?.metadata;
+    const retention = key.endsWith('/pending') ? PENDING_RETENTION_MS : DOCUMENT_RETENTION_MS;
+    if (metadata?.room !== room || !Number.isFinite(metadata.createdAt) || now() - metadata.createdAt < retention) continue;
+    for (const child of keys) {
+      if (child.startsWith(`${fileId}/`) && child !== key && child !== `${fileId}/pending`) await documents.delete(child);
+    }
+    if (key === fileId && keys.has(`${fileId}/pending`)) await documents.delete(`${fileId}/pending`);
+    // Delete the metadata last so interrupted cleanup can be retried next upload.
+    await documents.delete(key);
+  }
+}
+
+export function createDocumentHandler({ documents, meetings, adminKey, now = Date.now, createId = randomUUID }) {
   return async request => {
     const url = new URL(request.url);
     const room = url.searchParams.get('room') || '';
@@ -28,9 +57,9 @@ export function createDocumentHandler({ documents, adminKey, now = Date.now, cre
           if (!url.searchParams.has('part') || !Number.isInteger(part) || part < 0 || part >= entry.metadata.parts) return json({ error: '조각 번호가 올바르지 않습니다.' }, 400);
           const chunk = await documents.getWithMetadata(`${fileId}/part/${part}`, { type: 'arrayBuffer', consistency: 'strong' });
           if (!chunk || chunk.metadata.room !== room) return json({ error: '자료 조각을 찾을 수 없습니다.' }, 404);
-          return new Response(chunk.data, { headers: { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store' } });
+          return new Response(chunk.data, { headers: { 'Content-Type': 'application/octet-stream', 'Cache-Control': pdfCache, 'X-Content-Type-Options': 'nosniff' } });
         }
-        return new Response(entry.data, { headers: { 'Content-Type': 'application/pdf', 'Cache-Control': 'no-store',
+        return new Response(entry.data, { headers: { 'Content-Type': 'application/pdf', 'Cache-Control': pdfCache,
           'X-Content-Type-Options': 'nosniff', 'Content-Disposition': `inline; filename="meeting.pdf"; filename*=UTF-8''${encodeURIComponent(entry.metadata.name)}` } });
       }
       if (!adminKey || adminKey.length < 6) return json({ error: '서버의 관리자 인증키를 설정해주세요.' }, 503);
@@ -41,6 +70,11 @@ export function createDocumentHandler({ documents, adminKey, now = Date.now, cre
       const bytes = await request.arrayBuffer();
       if (bytes.byteLength > MAX_PDF_BYTES) return json({ error: 'PDF는 4.5MB 이하만 업로드할 수 있습니다.' }, 413);
       const action = url.searchParams.get('action');
+      const cleanup = async () => {
+        if (!meetings) return;
+        try { await cleanupDocuments({ documents, meetings, room, now }); }
+        catch { console.warn('Meeting document cleanup deferred until next upload.'); }
+      };
       if (action === 'init') {
         let body;
         try { body = JSON.parse(Buffer.from(bytes).toString()); } catch { return json({ error: '업로드 정보가 올바르지 않습니다.' }, 400); }
@@ -48,6 +82,7 @@ export function createDocumentHandler({ documents, adminKey, now = Date.now, cre
         const uploadId = createId();
         const name = Array.from(String(body.name || 'meeting.pdf').replace(/[\x00-\x1f\x7f/\\]/g, '_')).slice(0, 180).join('').trim() || 'meeting.pdf';
         const metadata = { room, name, id: body.id, size: body.size, parts: Math.ceil(body.size / PART_BYTES), documentType: body.documentType, createdAt: now() };
+        await cleanup();
         await documents.set(`${uploadId}/pending`, new Uint8Array(), { metadata });
         return json({ uploadId, parts: metadata.parts, partBytes: PART_BYTES }, 201);
       }
@@ -57,6 +92,10 @@ export function createDocumentHandler({ documents, adminKey, now = Date.now, cre
         const pending = await documents.getMetadata(`${uploadId}/pending`, { consistency: 'strong' });
         if (!pending || pending.metadata.room !== room || now() - pending.metadata.createdAt > 60 * 60 * 1000) return json({ error: '업로드가 만료되었습니다. 다시 선택해주세요.' }, 404);
         const metadata = pending.metadata;
+        if (await documents.getMetadata(uploadId, { consistency: 'strong' })) {
+          if (action === 'complete') return json({ document: documentInfo(room, uploadId, metadata) }, 201);
+          return json({ error: '완료된 자료는 변경할 수 없습니다. 다시 업로드해주세요.' }, 409);
+        }
         if (action === 'part') {
           const part = Number(url.searchParams.get('part'));
           if (!url.searchParams.has('part') || !Number.isInteger(part) || part < 0 || part >= metadata.parts) return json({ error: '조각 번호가 올바르지 않습니다.' }, 400);
@@ -87,6 +126,7 @@ export function createDocumentHandler({ documents, adminKey, now = Date.now, cre
       const documentType = request.headers.get('x-document-type') || 'questions';
       if (!['questions', 'receipt'].includes(documentType)) return json({ error: '자료구분이 올바르지 않습니다.' }, 400);
       const metadata = { room, name, documentType, id: createHash('sha256').update(Buffer.from(bytes)).digest('hex'), createdAt: now() };
+      await cleanup();
       await documents.set(fileId, bytes, { metadata });
       // Upload alone never changes the active meeting. The presenter downloads
       // and parses this exact object before committing the document switch.

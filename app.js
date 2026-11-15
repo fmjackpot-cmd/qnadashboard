@@ -2139,7 +2139,7 @@ async function loadSharedPdf(descriptor) {
       if (revision !== documentLoadRevision) throw new Error('다른 자료를 불러오는 중입니다.');
       if (descriptor.parts) url.searchParams.set('part', part);
       if (desc) desc.innerText = `${descriptor.name || '회의 자료'} · 다운로드 ${part + 1}/${parts}`;
-      const response = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(60000) });
+      const response = await fetch(url, { cache: 'default', signal: AbortSignal.timeout(60000) });
       if (!response.ok) throw new Error('회의 PDF를 다운로드하지 못했습니다. 다시 연결해주세요.');
       const chunk = new Uint8Array(await response.arrayBuffer());
       if (chunk.byteLength > 4500000 || (descriptor.parts && chunk.byteLength !== Math.min(3000000, descriptor.size - total))) throw new Error('회의 PDF 조각 크기가 올바르지 않습니다.');

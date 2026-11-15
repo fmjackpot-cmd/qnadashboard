@@ -6,6 +6,7 @@ export default async request => {
     const namespace = process.env.CONTEXT === 'production' ? 'production' : (process.env.DEPLOY_ID || 'local');
     return await createDocumentHandler({
       documents: getStore({ name: `dashboard-documents-${namespace}`, consistency: 'strong' }),
+      meetings: getStore({ name: `dashboard-meetings-${namespace}`, consistency: 'strong' }),
       adminKey: process.env.MEETING_ADMIN_KEY
     })(request);
   } catch {

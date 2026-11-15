@@ -126,21 +126,39 @@ test('loading and document errors retry without marking an admin move as consume
   assert.equal(viewer.client.lastRevision, 'event-1');
 });
 
-test('ordered admin writes cannot let a slow older move overwrite the latest move', async () => {
+test('rapid admin selections publish only the final choice, and leave cancels an unsent choice', async () => {
+  const { makeClient, publications } = await setup();
+  const admin = makeClient();
+  await admin.client.join('room', key);
+  await Promise.all([1, 2, 3, 4].map(id => admin.client.navigate(target(id))));
+  assert.deepEqual(publications.map(item => item.state.questionId), [4]);
+  const pending = admin.client.navigate(target(5));
+  admin.client.leave();
+  await pending;
+  assert.equal(publications.length, 1);
+});
+
+test('in-flight admin write finishes before the final queued selection; intermediate selections are skipped', async () => {
   const { makeClient, request, records } = await setup();
   let release;
   const firstWrite = new Promise(resolve => { release = resolve; });
+  let started;
+  const firstStarted = new Promise(resolve => { started = resolve; });
+  const sent = [];
   const admin = makeClient({ request: async (room, body, token) => {
-    if (body?.questionId === 1) await firstWrite;
+    if (body?.questionId) sent.push(body.questionId);
+    if (body?.questionId === 1) { started(); await firstWrite; }
     return request(room, body, token);
   } });
   await admin.client.join('room', key);
   const first = admin.client.navigate(target(1));
+  await firstStarted;
   const second = admin.client.navigate(target(2));
-  await Promise.resolve();
+  const third = admin.client.navigate(target(3));
   release();
-  await Promise.all([first, second]);
-  assert.equal(records.get('room').questionId, 2);
+  await Promise.all([first, second, third]);
+  assert.deepEqual(sent, [1, 3]);
+  assert.equal(records.get('room').questionId, 3);
   assert.equal(records.get('room').revision, 'event-2');
 });
 
