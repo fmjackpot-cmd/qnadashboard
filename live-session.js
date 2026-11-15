@@ -1,24 +1,24 @@
 (function (root) {
   'use strict';
 
-  async function uploadPdfParts({ room, file, key, endpoint, documentType = 'questions', fetcher = root.fetch.bind(root), crypto = root.crypto, onProgress = () => {} }) {
+  async function uploadPdfParts({ room, file, key, endpoint, documentType = 'questions', purpose, fetcher = root.fetch.bind(root), crypto = root.crypto, onProgress = () => {} }) {
     const url = new URL(endpoint);
     url.searchParams.set('room', room);
     const send = async (target, body, headers = {}) => {
       const response = await fetcher(target, { method: 'POST', body, signal: AbortSignal.timeout(60000),
-        headers: { Authorization: `Bearer ${key}`, ...headers } });
+        headers: { Authorization: `Bearer ${key}`, ...(purpose ? { 'X-Document-Purpose': purpose } : {}), ...headers } });
       let result;
       try { result = await response.json(); } catch { throw new Error('업로드 응답을 확인하지 못했습니다. 다시 시도해주세요.'); }
       if (!response.ok) throw new Error(result.error || 'PDF 업로드에 실패했습니다.');
       return result;
     };
-    if (file.size <= 4500000) return send(url, file, { 'Content-Type': 'application/pdf', 'X-Pdf-Name': encodeURIComponent(file.name), 'X-Document-Type': documentType });
+    if (file.size <= 4500000) return send(url, file, { 'Content-Type': file.type || 'application/pdf', 'X-Pdf-Name': encodeURIComponent(file.name), 'X-Document-Type': documentType });
     if (file.size > 50000000) throw new Error('PDF는 최대 50MB까지 업로드할 수 있습니다.');
     const bytes = await file.arrayBuffer();
     const hash = await crypto.subtle.digest('SHA-256', bytes);
     const id = Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, '0')).join('');
     url.searchParams.set('action', 'init');
-    const init = await send(url, JSON.stringify({ name: file.name, size: file.size, id, documentType }), { 'Content-Type': 'application/json' });
+    const init = await send(url, JSON.stringify({ name: file.name, size: file.size, id, documentType, purpose }), { 'Content-Type': 'application/json' });
     url.searchParams.set('upload', init.uploadId);
     for (let part = 0; part < init.parts; part++) {
       url.searchParams.set('action', 'part');
@@ -165,7 +165,7 @@
 
     receiveMessage(message) {
       if (!this.active || this.role !== 'viewer' || !message || typeof message.id !== 'string' ||
-          !message.id || typeof message.text !== 'string' || !message.text.trim() || message.text.length > 1000 ||
+          !message.id || typeof message.text !== 'string' || (!message.text.trim() && !message.attachment) || message.text.length > 1000 ||
           !Number.isFinite(message.sentAt) || this.seenMessages.has(message.id)) return;
       this.seenMessages.add(message.id);
       if (this.dismissedMessages.has(message.id)) return;
@@ -183,11 +183,12 @@
       this.onMessage(this.messages[0] || null);
     }
 
-    async sendMessage(text) {
+    async sendMessage(text, attachment) {
       if (!this.active || this.role !== 'admin') throw new Error('관리자로 회의에 연결해주세요.');
-      if (typeof text !== 'string' || !text.trim() || text.length > 1000) throw new Error('메시지는 1~1,000자로 입력해주세요.');
+      if (typeof text !== 'string' || (!text.trim() && !attachment) || text.length > 1000) throw new Error('메시지를 입력하거나 이미지·PDF를 첨부해주세요.');
       const generation = this.generation;
-      const { message } = await this.request(this.room, { action: 'send-message', text }, this.key);
+      const { message } = await this.request(this.room, { action: 'send-message', text,
+        ...(attachment ? { attachmentId: attachment.fileId } : {}) }, this.key);
       return generation === this.generation ? message : null;
     }
 
@@ -366,6 +367,9 @@
     const messageForm = el('meeting-message-form');
     const messageText = el('meeting-message-text');
     const messageFeedback = el('meeting-message-feedback');
+    const mediaView = root.MessageMedia?.createAttachmentView({ container: el('meeting-message-media'), dialog: messageDialog,
+      endpoint: root.DASHBOARD_CONFIG?.meetingDocumentEndpoint || '/.netlify/functions/meeting-document' });
+    let resetAttachment = () => {};
     const endpoint = root.DASHBOARD_CONFIG?.meetingEndpoint;
     const labels = {
       offline: '개별 열람 · 회의에 연결하면 관리자 이동이 우선 표시됩니다',
@@ -420,10 +424,13 @@
       request,
       messageStorage,
       onMessage: message => {
-        if (!message) { if (messageDialog.open) messageDialog.close(); return; }
+        if (!message) { mediaView?.clear(); if (messageDialog.open) messageDialog.close(); return; }
         el('meeting-message-body').textContent = message.text;
+        el('meeting-message-body').hidden = !message.text;
         el('meeting-message-body').scrollTop = 0;
+        root.MessageMedia?.positionMessageDialog(messageDialog);
         if (!messageDialog.open) messageDialog.showModal();
+        mediaView?.show(message.attachment);
         el('meeting-message-close').focus?.();
       },
       getTarget: () => root.DashboardMeeting.getTarget(),
@@ -437,6 +444,7 @@
       getDocument: () => root.DashboardMeeting.getDocument(),
       showTarget: state => root.DashboardMeeting.showTarget(state),
       onStatus: (kind, message) => {
+        if (messageDialog.open) root.MessageMedia?.positionMessageDialog(messageDialog);
         status.textContent = message || labels[kind];
         status.dataset.state = kind;
         el('meeting-send').hidden = !session?.active || session.role !== 'admin';
@@ -444,6 +452,7 @@
         el('meeting-message-settings').hidden = !session?.active || session.role !== 'admin';
         messageForm.hidden = !session?.active || session.role !== 'admin';
         if (kind === 'offline') {
+          resetAttachment();
           messageText.value = ''; messageFeedback.textContent = '';
           if (composeDialog.open) composeDialog.close();
         }
@@ -542,20 +551,74 @@
     };
     el('meeting-message-settings').onclick = el('meeting-message-open').onclick;
     el('meeting-compose-close').onclick = () => composeDialog.close();
+    let preparedFile = null, uploadedAttachment = null, previewUrl = null, selectionRevision = 0, preparing = false;
+    const attachmentInfo = el('meeting-attachment-info');
+    const attachmentPreview = el('meeting-attachment-preview');
+    const attachmentInput = el('meeting-attachment-file');
+    const captureInput = el('meeting-attachment-capture');
+    const attachmentRemove = el('meeting-attachment-remove');
+    resetAttachment = () => {
+      selectionRevision++; preparing = false; preparedFile = uploadedAttachment = null;
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      previewUrl = null; attachmentPreview.hidden = true; attachmentPreview.removeAttribute?.('src');
+      attachmentRemove.hidden = true; attachmentInput.value = captureInput.value = '';
+      attachmentInfo.textContent = '한 번에 1개 · PDF 최대 50MB · 사진은 전송 전에 용량을 줄입니다.';
+    };
+    const sizeLabel = size => size < 1000000 ? `${Math.ceil(size / 1000)}KB` : `${(size / 1000000).toFixed(1)}MB`;
+    const selectAttachment = async files => {
+      if (el('meeting-message-send').disabled) return;
+      resetAttachment();
+      if (!files?.length) return;
+      if (files.length !== 1) { attachmentInfo.textContent = '한 번에 파일 1개를 선택해주세요.'; return; }
+      const selection = selectionRevision;
+      preparing = true; attachmentInfo.textContent = '첨부를 준비하는 중…';
+      try {
+        const result = await root.MessageMedia.prepareMessageFile(files[0]);
+        if (selection !== selectionRevision) return;
+        preparedFile = result.file;
+        attachmentInfo.textContent = `${preparedFile.name} · ${sizeLabel(result.originalSize)} → ${sizeLabel(preparedFile.size)}`;
+        attachmentRemove.hidden = false;
+        if (preparedFile.type.startsWith('image/')) {
+          previewUrl = URL.createObjectURL(preparedFile); attachmentPreview.src = previewUrl; attachmentPreview.hidden = false;
+        }
+      } catch (error) { if (selection === selectionRevision) attachmentInfo.textContent = error.message; }
+      finally { if (selection === selectionRevision) preparing = false; }
+    };
+    attachmentInput.onchange = () => selectAttachment(Array.from(attachmentInput.files || []));
+    captureInput.onchange = () => selectAttachment(Array.from(captureInput.files || []));
+    el('meeting-attachment-choose').onclick = () => attachmentInput.click();
+    el('meeting-attachment-camera').onclick = () => captureInput.click();
+    attachmentRemove.onclick = () => { if (!el('meeting-message-send').disabled) resetAttachment(); };
+    const dropZone = el('meeting-attachment-drop');
+    dropZone.ondragover = event => { event.preventDefault(); dropZone.dataset.dragging = 'true'; };
+    dropZone.ondragleave = () => { dropZone.dataset.dragging = 'false'; };
+    dropZone.ondrop = event => { event.preventDefault(); dropZone.dataset.dragging = 'false'; return selectAttachment(Array.from(event.dataTransfer?.files || [])); };
     messageForm.onsubmit = async event => {
       event.preventDefault();
       const button = el('meeting-message-send');
       if (button.disabled) return;
+      if (preparing) { messageFeedback.textContent = '첨부 준비가 끝난 뒤 전송해주세요.'; return; }
+      if (!messageText.value.trim() && !preparedFile) { messageFeedback.textContent = '메시지를 입력하거나 이미지·PDF를 첨부해주세요.'; return; }
+      const generation = session.generation;
       button.disabled = true;
       messageFeedback.dataset.state = 'sending';
       messageFeedback.textContent = '메시지 전송 중…';
       try {
-        const message = await session.sendMessage(messageText.value);
+        if (preparedFile && !uploadedAttachment) {
+          const result = await uploadPdfParts({ room: session.room, key: session.key, file: preparedFile, purpose: 'message',
+            endpoint: new URL(root.DASHBOARD_CONFIG?.meetingDocumentEndpoint || '/.netlify/functions/meeting-document', location.href),
+            onProgress: text => { if (generation === session.generation) messageFeedback.textContent = text; } });
+          if (generation !== session.generation) return;
+          uploadedAttachment = result.document;
+        }
+        const message = await session.sendMessage(messageText.value, uploadedAttachment);
         if (!message) return;
         messageText.value = '';
+        resetAttachment();
         messageFeedback.dataset.state = 'sent';
         messageFeedback.textContent = '전체 참여자에게 메시지를 전송했습니다.';
       } catch (error) {
+        if (generation !== session.generation) return;
         messageFeedback.dataset.state = 'error';
         messageFeedback.textContent = error.message;
       } finally { button.disabled = false; }
@@ -578,6 +641,7 @@
       catch { input.focus(); input.select(); el('meeting-error').textContent = '선택된 주소를 복사해주세요.'; }
     };
     root.addEventListener('dashboard-navigation', event => session.navigate(event.detail));
+    root.addEventListener('resize', () => { if (messageDialog.open) root.MessageMedia?.positionMessageDialog(messageDialog); });
     root.addEventListener('dashboard-document-ready', () => {
       const shell = el('dashboard-shell');
       shell.dataset.starting = 'false';

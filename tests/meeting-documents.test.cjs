@@ -93,6 +93,66 @@ test('cleanup failure does not block a new upload or change the active document'
   assert.equal(warnings.mock.callCount(), 1);
 });
 
+test('image and 5MB PDF messages use verified attachments without replacing the meeting PDF', async () => {
+  const f = await fixture();
+  const { downloadAttachment } = require('../message-media.js');
+  const crypto = require('node:crypto').webcrypto;
+  const base = 'https://dashboard.test/.netlify/functions/meeting-document';
+  const original = (await f.uploadFile('room', pdf('meeting'), adminKey)).document;
+  await f.request('room', { action: 'set-document', fileId: original.fileId, documentId: original.id, mode: 'question', questionId: 1 }, adminKey);
+  const snapshot = f.states.get('room');
+  const image = new File([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), 'test image'], 'photo.png', { type: 'image/png' });
+  const pdfBytes = Buffer.alloc(5_000_000, 42); pdfBytes.write('%PDF-1.7');
+  for (const file of [image, new File([pdfBytes], '첨부.pdf', { type: 'application/pdf' })]) {
+    const { document } = await uploadPdfParts({ room: 'room', key: adminKey, file, purpose: 'message', endpoint: base,
+      crypto, fetcher: (url, options) => f.fileHandler(new Request(url, options)) });
+    const message = (await f.request('room', { action: 'send-message', text: '', attachmentId: document.fileId }, adminKey)).message;
+    assert.equal(message.attachment.mediaType, file.type);
+    assert.equal(message.attachment.size, file.size);
+    assert.equal(f.states.get('room'), snapshot, 'message attachment cannot switch the main PDF');
+    const downloaded = await downloadAttachment(message.attachment, { endpoint: base, crypto,
+      fetcher: url => f.fileHandler(new Request(url)) });
+    assert.deepEqual(Buffer.from(downloaded), Buffer.from(await file.arrayBuffer()));
+    assert(JSON.stringify(f.published.at(-1)).length < 2000, 'Ably carries only metadata');
+    await assert.rejects(f.request('other', { action: 'send-message', text: '', attachmentId: document.fileId }, adminKey), /다시 선택/);
+    await assert.rejects(f.request('room', { action: 'set-document', fileId: document.fileId, documentId: document.id,
+      mode: 'question', questionId: 1 }, adminKey), /일치/);
+  }
+  await assert.rejects(f.request('room', { action: 'send-message', text: '', attachmentId: original.fileId }, adminKey), /다시 선택/);
+  await assert.rejects(f.request('room', { action: 'send-message', text: '', attachmentId: 'bad' }, adminKey), /올바르지/);
+  const lateMessages = (await f.request('room')).messages;
+  assert.equal(lateMessages.length, 2);
+  assert(lateMessages.every(message => message.attachment));
+  const shown = [];
+  const viewer = new MeetingSession({ request: f.request, subscribe: f.subscribe, getDocument: () => ({ ready: true }),
+    showTarget: async () => {}, onMessage: message => shown.push(message) });
+  await viewer.join('room');
+  assert.equal(shown.at(-1).attachment.mediaType, 'image/png');
+  viewer.dismissMessage();
+  assert.equal(shown.at(-1).attachment.mediaType, 'application/pdf');
+  viewer.leave();
+  const attachmentId = lateMessages[0].attachment.fileId;
+  f.advance(12 * 60 * 60 * 1000);
+  await assert.rejects(f.request('room', { action: 'send-message', text: '', attachmentId }, adminKey), /다시 선택/);
+  f.advance(12 * 60 * 60 * 1000 + 1);
+  await f.uploadFile('room', pdf('cleanup'), adminKey);
+  for (const message of lateMessages) assert(![...f.files.keys()].some(key => key.startsWith(message.attachment.fileId)));
+  assert(f.files.has(original.fileId));
+});
+
+test('attachment upload rejects unauthenticated, cross-origin, SVG, mismatched-purpose and oversized images', async () => {
+  const f = await fixture();
+  const upload = (body, headers = {}) => f.fileHandler(new Request('https://dashboard.test/.netlify/functions/meeting-document?room=room', {
+    method: 'POST', headers: { Authorization: `Bearer ${adminKey}`, 'X-Document-Purpose': 'message', ...headers }, body
+  }));
+  assert.equal((await upload('<svg onload="alert(1)"/>')).status, 400);
+  const image = Buffer.from([255, 216, 255, 224, 0, 0]);
+  assert.equal((await upload(image, { Authorization: 'Bearer wrong' })).status, 401);
+  assert.equal((await upload(image, { Origin: 'https://other.test' })).status, 403);
+  assert.equal((await upload(image, { 'X-Document-Purpose': '' })).status, 400);
+  assert.equal((await upload(image, { 'Content-Length': '4500001' })).status, 413);
+});
+
 test('cleanup uses metadata only, keeps unexpired uploads and retries interrupted deletion', async () => {
   const { cleanupDocuments, DOCUMENT_RETENTION_MS } = await import('../netlify/lib/meeting-documents.mjs');
   const expired = '33333333-3333-3333-3333-333333333333';

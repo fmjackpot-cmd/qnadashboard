@@ -21,7 +21,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.9/pdf-lib.min.js"></script>
 
   <!-- External Stylesheet -->
-  <link rel="stylesheet" href="style.css?v=20261113-messages">
+  <link rel="stylesheet" href="style.css?v=20261115-attachments">
 </head>
 <body>
 
@@ -296,7 +296,19 @@
     </div>
     <form id="meeting-message-form" hidden>
       <label for="meeting-message-text">메시지 내용</label>
-      <textarea id="meeting-message-text" rows="5" maxlength="1000" required placeholder="전체 참여자에게 전달할 내용을 입력하세요."></textarea>
+      <textarea id="meeting-message-text" rows="4" maxlength="1000" placeholder="전체 참여자에게 전달할 내용을 입력하세요. 첨부만 보낼 수도 있습니다."></textarea>
+      <div id="meeting-attachment-drop" class="meeting-attachment-drop">
+        <p>이미지·PDF를 여기에 놓거나 선택하세요</p>
+        <div class="meeting-attachment-actions">
+          <button type="button" id="meeting-attachment-choose">파일·사진 선택</button>
+          <button type="button" id="meeting-attachment-camera" class="meeting-camera-button">사진 촬영</button>
+          <button type="button" id="meeting-attachment-remove" hidden>첨부 제거</button>
+        </div>
+        <input type="file" id="meeting-attachment-file" accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif,application/pdf,.pdf" hidden>
+        <input type="file" id="meeting-attachment-capture" accept="image/*" capture="environment" hidden>
+        <img id="meeting-attachment-preview" class="meeting-attachment-preview" alt="보낼 이미지 미리보기" hidden>
+        <p id="meeting-attachment-info" role="status" aria-live="polite">한 번에 1개 · PDF 최대 50MB · 사진은 전송 전에 용량을 줄입니다.</p>
+      </div>
       <p class="meeting-message-hint">최대 1,000자 · 참여자가 닫을 때까지 팝업으로 표시됩니다.</p>
       <button type="submit" id="meeting-message-send">전체 참여자에게 전송</button>
       <p id="meeting-message-feedback" role="status" aria-live="polite"></p>
@@ -308,6 +320,7 @@
       <span>관리자 알림</span>
     </header>
     <div id="meeting-message-body" class="meeting-message-body" tabindex="0"></div>
+    <div id="meeting-message-media" class="meeting-message-media" hidden></div>
     <footer class="meeting-message-footer">
       <span>내용을 확인한 뒤 닫아주세요.</span>
       <button type="button" id="meeting-message-close" autofocus>닫기</button>
@@ -315,6 +328,7 @@
   </dialog>
   <script src="dashboard-config.js?v=20261103-empty-start" defer></script>
   <script src="app.js?v=20261110-category-default" defer></script>
-  <script src="live-session.js?v=20261113-messages" defer></script>
+  <script src="message-media.js?v=20261115-attachments" defer></script>
+  <script src="live-session.js?v=20261115-attachments" defer></script>
 </body>
 </html>

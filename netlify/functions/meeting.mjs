@@ -47,14 +47,23 @@ export function createHandler({ store, documents, adminKey, broker, now = Date.n
       if (body?.action !== 'send-message' && bodyText.length > 2048) return json({ error: '요청이 너무 큽니다.' }, 413);
       if (body?.action === 'authenticate') return json({ authenticated: true });
       if (body?.action === 'send-message') {
-        if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 1000) {
-          return json({ error: '메시지는 1~1,000자로 입력해주세요.' }, 400);
+        if (typeof body.text !== 'string' || body.text.length > 1000 || (!body.text.trim() && !body.attachmentId)) {
+          return json({ error: '1~1,000자 메시지 또는 이미지·PDF를 첨부해주세요.' }, 400);
+        }
+        let attachment;
+        if (body.attachmentId !== undefined) {
+          if (!documents || !validFileId(body.attachmentId)) return json({ error: '첨부 파일이 올바르지 않습니다.' }, 400);
+          const entry = await documents.getMetadata(body.attachmentId, { consistency: 'strong' });
+          if (!entry || entry.metadata.room !== room || entry.metadata.purpose !== 'message' ||
+              now() - entry.metadata.createdAt >= 12 * 60 * 60 * 1000) return json({ error: '첨부 파일을 다시 선택해주세요.' }, 400);
+          attachment = documentInfo(room, body.attachmentId, entry.metadata);
         }
         const messageKey = `messages:${room}`;
         const snapshot = store.getWithMetadata
           ? await store.getWithMetadata(messageKey, { type: 'json', consistency: 'strong' }) : null;
         const previous = store.getWithMetadata ? snapshot?.data : await store.get(messageKey, { type: 'json', consistency: 'strong' });
         const message = { id: revision(), text: body.text.trim(), sentAt: now() };
+        if (attachment) message.attachment = attachment;
         const messages = [...(previous || []).filter(item => now() - item.sentAt < maxAge), message].slice(-50);
         const written = await store.setJSON(messageKey, messages, store.getWithMetadata
           ? (snapshot ? { onlyIfMatch: snapshot.etag } : { onlyIfNew: true }) : undefined);
@@ -80,7 +89,7 @@ export function createHandler({ store, documents, adminKey, broker, now = Date.n
       if (body.action === 'set-document') {
         if (!documents || !validFileId(body.fileId)) return json({ error: '먼저 회의 자료를 업로드해주세요.' }, 400);
         const entry = await documents.getMetadata(body.fileId, { consistency: 'strong' });
-        if (!entry || entry.metadata.room !== room || entry.metadata.id !== body.documentId) return json({ error: '업로드한 회의 자료가 일치하지 않습니다.' }, 400);
+        if (!entry || entry.metadata.room !== room || entry.metadata.id !== body.documentId || entry.metadata.purpose === 'message') return json({ error: '업로드한 회의 자료가 일치하지 않습니다.' }, 400);
         if (previous?.document?.fileId !== body.fileId && now() - entry.metadata.createdAt >= DOCUMENT_RETENTION_MS) {
           return json({ error: '오래된 업로드입니다. PDF를 다시 업로드해주세요.' }, 410);
         }

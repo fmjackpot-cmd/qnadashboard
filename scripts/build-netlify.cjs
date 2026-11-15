@@ -9,7 +9,7 @@ fs.rmSync(out, { recursive: true, force: true });
 fs.mkdirSync(path.join(out, 'vendor'), { recursive: true });
 fs.copyFileSync(path.join(ablyRoot, 'build/ably.min.js'), path.join(out, 'vendor/ably.min.js'));
 fs.copyFileSync(path.join(ablyRoot, 'LICENSE'), path.join(out, 'vendor/ABLY-LICENSE'));
-for (const asset of ['index.html', 'app.js', 'style.css', 'manifest.json', 'live-session.js']) {
+for (const asset of ['index.html', 'app.js', 'style.css', 'manifest.json', 'live-session.js', 'message-media.js']) {
   fs.copyFileSync(path.join(root, asset), path.join(out, asset));
 }
 fs.writeFileSync(path.join(out, 'dashboard-config.js'), `window.DASHBOARD_CONFIG = ${JSON.stringify({
@@ -22,6 +22,8 @@ fs.writeFileSync(path.join(out, '_headers'), `/*
 /app.js
   Cache-Control: public, max-age=0, must-revalidate
 /live-session.js
+  Cache-Control: public, max-age=0, must-revalidate
+/message-media.js
   Cache-Control: public, max-age=0, must-revalidate
 /dashboard-config.js
   Cache-Control: public, max-age=0, must-revalidate

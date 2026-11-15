@@ -12,6 +12,7 @@ const json = (value, status = 200) => new Response(JSON.stringify(value), { stat
   headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
 const digest = value => createHash('sha256').update(value).digest();
 export const documentInfo = (room, fileId, metadata) => ({ id: metadata.id, fileId, name: metadata.name,
+  ...(metadata.purpose === 'message' ? { mediaType: metadata.mediaType || 'application/pdf', size: metadata.size } : {}),
   documentType: metadata.documentType || 'questions', ...(metadata.parts ? { parts: metadata.parts, size: metadata.size } : {}),
   url: `/.netlify/functions/meeting-document?room=${encodeURIComponent(room)}&file=${fileId}` });
 
@@ -29,7 +30,7 @@ export async function cleanupDocuments({ documents, meetings, room, now = Date.n
     if (key.endsWith('/pending') && keys.has(fileId)) continue;
     const entry = await documents.getMetadata(key, { consistency: 'strong' });
     const metadata = entry?.metadata;
-    const retention = key.endsWith('/pending') ? PENDING_RETENTION_MS : DOCUMENT_RETENTION_MS;
+    const retention = key.endsWith('/pending') || metadata?.purpose === 'message' ? PENDING_RETENTION_MS : DOCUMENT_RETENTION_MS;
     if (metadata?.room !== room || !Number.isFinite(metadata.createdAt) || now() - metadata.createdAt < retention) continue;
     for (const child of keys) {
       if (child.startsWith(`${fileId}/`) && child !== key && child !== `${fileId}/pending`) await documents.delete(child);
@@ -59,8 +60,8 @@ export function createDocumentHandler({ documents, meetings, adminKey, now = Dat
           if (!chunk || chunk.metadata.room !== room) return json({ error: '자료 조각을 찾을 수 없습니다.' }, 404);
           return new Response(chunk.data, { headers: { 'Content-Type': 'application/octet-stream', 'Cache-Control': pdfCache, 'X-Content-Type-Options': 'nosniff' } });
         }
-        return new Response(entry.data, { headers: { 'Content-Type': 'application/pdf', 'Cache-Control': pdfCache,
-          'X-Content-Type-Options': 'nosniff', 'Content-Disposition': `inline; filename="meeting.pdf"; filename*=UTF-8''${encodeURIComponent(entry.metadata.name)}` } });
+        return new Response(entry.data, { headers: { 'Content-Type': entry.metadata.mediaType || 'application/pdf', 'Cache-Control': pdfCache,
+          'X-Content-Type-Options': 'nosniff', 'Content-Disposition': `inline; filename="attachment"; filename*=UTF-8''${encodeURIComponent(entry.metadata.name)}` } });
       }
       if (!adminKey || adminKey.length < 6) return json({ error: '서버의 관리자 인증키를 설정해주세요.' }, 503);
       if (!timingSafeEqual(digest(request.headers.get('authorization') || ''), digest(`Bearer ${adminKey}`))) return json({ error: '관리자 인증키를 확인해주세요.' }, 401);
@@ -81,7 +82,8 @@ export function createDocumentHandler({ documents, meetings, adminKey, now = Dat
         if (!Number.isSafeInteger(body.size) || body.size < 1 || body.size > MAX_DOCUMENT_BYTES || !/^[a-f0-9]{64}$/.test(body.id || '') || !['questions', 'receipt'].includes(body.documentType)) return json({ error: 'PDF는 최대 50MB이며 올바른 자료구분을 선택해야 합니다.' }, 400);
         const uploadId = createId();
         const name = Array.from(String(body.name || 'meeting.pdf').replace(/[\x00-\x1f\x7f/\\]/g, '_')).slice(0, 180).join('').trim() || 'meeting.pdf';
-        const metadata = { room, name, id: body.id, size: body.size, parts: Math.ceil(body.size / PART_BYTES), documentType: body.documentType, createdAt: now() };
+        const metadata = { room, name, id: body.id, size: body.size, parts: Math.ceil(body.size / PART_BYTES), documentType: body.documentType, createdAt: now(),
+          ...(body.purpose === 'message' ? { purpose: 'message', mediaType: 'application/pdf' } : {}) };
         await cleanup();
         await documents.set(`${uploadId}/pending`, new Uint8Array(), { metadata });
         return json({ uploadId, parts: metadata.parts, partBytes: PART_BYTES }, 201);
@@ -117,7 +119,12 @@ export function createDocumentHandler({ documents, meetings, adminKey, now = Dat
         return json({ document: documentInfo(room, uploadId, metadata) }, 201);
       }
       if (action) return json({ error: '알 수 없는 업로드 요청입니다.' }, 400);
-      if (!bytes.byteLength || !Buffer.from(bytes).subarray(0, 1024).includes(Buffer.from('%PDF-'))) return json({ error: '올바른 PDF 파일을 선택해주세요.' }, 400);
+      const buffer = Buffer.from(bytes);
+      const imageType = buffer.subarray(0, 3).equals(Buffer.from([255, 216, 255])) ? 'image/jpeg'
+        : buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ? 'image/png'
+        : buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP' ? 'image/webp' : null;
+      const purpose = request.headers.get('x-document-purpose') === 'message' ? 'message' : null;
+      if (!bytes.byteLength || !(buffer.subarray(0, 1024).includes(Buffer.from('%PDF-')) || (purpose && imageType))) return json({ error: '올바른 PDF 또는 이미지 파일을 선택해주세요.' }, 400);
       let name;
       try { name = decodeURIComponent(request.headers.get('x-pdf-name') || 'meeting.pdf'); }
       catch { return json({ error: '파일 이름이 올바르지 않습니다.' }, 400); }
@@ -126,6 +133,7 @@ export function createDocumentHandler({ documents, meetings, adminKey, now = Dat
       const documentType = request.headers.get('x-document-type') || 'questions';
       if (!['questions', 'receipt'].includes(documentType)) return json({ error: '자료구분이 올바르지 않습니다.' }, 400);
       const metadata = { room, name, documentType, id: createHash('sha256').update(Buffer.from(bytes)).digest('hex'), createdAt: now() };
+      if (purpose) Object.assign(metadata, { purpose, mediaType: imageType || 'application/pdf', size: bytes.byteLength });
       await cleanup();
       await documents.set(fileId, bytes, { metadata });
       // Upload alone never changes the active meeting. The presenter downloads

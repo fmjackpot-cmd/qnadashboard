@@ -11,6 +11,7 @@ test('meeting form authenticates, clears the key field, and shares a viewer URL 
     value: '', dataset: {}, hidden: false, textContent: '',
     addEventListener(name, listener) { this[name] = listener; },
     querySelectorAll() { return []; },
+    click() { this.clicked = true; },
     showModal() { this.open = true; },
     close() { this.open = false; if (this.closeListener) this.closeListener(); }
   });
@@ -141,6 +142,32 @@ test('meeting form authenticates, clears the key field, and shares a viewer URL 
   elements.get('meeting-message-close').onclick();
   assert.equal(popup.open, false);
   elements.get('meeting-leave').onclick();
+  elements.get('start-admin').onclick();
+  elements.get('meeting-room').value = 'audit-2026';
+  elements.get('meeting-key').value = 'test-only-key-never-share-this';
+  await elements.get('meeting-form').onsubmit({ preventDefault() {} });
+  context.MessageMedia = { prepareMessageFile: async file => ({ file, originalSize: file.size }) };
+  elements.get('meeting-attachment-choose').onclick();
+  assert.equal(elements.get('meeting-attachment-file').clicked, true);
+  elements.get('meeting-attachment-camera').onclick();
+  assert.equal(elements.get('meeting-attachment-capture').clicked, true);
+  const drop = elements.get('meeting-attachment-drop');
+  await drop.ondrop({ preventDefault() {}, dataTransfer: { files: [pdf] } });
+  assert.match(elements.get('meeting-attachment-info').textContent, /meeting.pdf/);
+  assert.equal(elements.get('meeting-attachment-remove').hidden, false);
+  elements.get('meeting-message-text').value = '';
+  await elements.get('meeting-message-form').onsubmit({ preventDefault() {} });
+  assert.equal(writes.at(-2).headers['X-Document-Purpose'], 'message');
+  assert.equal(writes.at(-1).body.action, 'send-message');
+  assert.equal(writes.at(-1).body.attachmentId, descriptor.fileId);
+  assert.equal(writes.at(-1).body.text, '');
+  assert.equal(elements.get('meeting-attachment-remove').hidden, true);
+  elements.get('meeting-attachment-file').files = [pdf];
+  await elements.get('meeting-attachment-file').onchange();
+  assert.equal(elements.get('meeting-attachment-remove').hidden, false);
+  elements.get('meeting-attachment-remove').onclick();
+  assert.equal(elements.get('meeting-attachment-remove').hidden, true);
+  elements.get('meeting-leave').onclick();
   context.fetch = async () => ({ ok: false, status: 429, json: async () => { throw new Error('plain text edge response'); } });
   elements.get('start-viewer').onclick();
   elements.get('meeting-room').value = 'audit-2026';
@@ -149,10 +176,10 @@ test('meeting form authenticates, clears the key field, and shares a viewer URL 
 });
 
 function appContext() {
-  const events = [];
+  const events = [], listeners = {};
   const context = {
     console, crypto: webcrypto,
-    window: { addEventListener() {}, dispatchEvent: event => events.push(event) },
+    window: { addEventListener: (name, listener) => { listeners[name] = listener; }, dispatchEvent: event => events.push(event) },
     document: { addEventListener() {} },
     CustomEvent: class { constructor(type, options = {}) { this.type = type; this.detail = options.detail; } }
   };
@@ -164,8 +191,23 @@ function appContext() {
     renderCurrentView = async () => { selectedQuestionId = currentQuestion.id; currentViewMode = 'question'; };
     closeMobileSidebar = () => {};
   `, context);
-  return { context, events };
+  return { context, events, listeners };
 }
+
+test('dropping an attachment in the compose dialog cannot trigger the global meeting PDF replacement', () => {
+  const { context, listeners } = appContext();
+  const compose = { open: true };
+  context.document.getElementById = id => id === 'meeting-compose-dialog' ? compose : null;
+  let replacements = 0;
+  context.processPdfFile = () => { replacements++; };
+  const event = { preventDefault() {}, dataTransfer: { files: [{ name: 'attachment.pdf' }] } };
+  listeners.dragenter(event);
+  listeners.drop(event);
+  assert.equal(replacements, 0);
+  compose.open = false;
+  listeners.drop(event);
+  assert.equal(replacements, 1, 'normal dashboard drops still work outside the compose dialog');
+});
 
 test('actual dashboard navigation broadcasts local moves and never echoes remote moves', async () => {
   const { context, events } = appContext();

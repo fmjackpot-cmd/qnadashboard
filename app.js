@@ -1870,6 +1870,7 @@ function handleDroppedFiles(dataTransfer) {
 // Window Drag & Drop Listeners
 window.addEventListener('dragenter', (e) => {
   e.preventDefault();
+  if (document.getElementById('meeting-compose-dialog')?.open) { resetDragVisuals(); return; }
   windowDragCounter++;
 
   const uploadOverlay = document.getElementById('upload-overlay');
@@ -1903,6 +1904,7 @@ window.addEventListener('dragleave', (e) => {
 window.addEventListener('drop', (e) => {
   e.preventDefault();
   resetDragVisuals();
+  if (document.getElementById('meeting-compose-dialog')?.open) return;
   handleDroppedFiles(e.dataTransfer);
 }, false);
 
