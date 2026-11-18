@@ -705,6 +705,42 @@ function parseTableToc(pageTexts, structure) {
   return items;
 }
 
+// Leader-dot TOCs: team headings (◈), optional subject headings (□), then
+// "number. title ··· printed page". Keep this layout separate from table parsers.
+function parseDottedToc(pageTexts, structure) {
+  const items = [];
+  let team = '';
+  let category = '';
+  for (const page of pageTexts.filter(p => (structure.tocPages || []).includes(p.pageNum))) {
+    const text = (page.text || '').replace(/\u0000/g, '');
+    if (!/(?:[·.]{3,}|…+)\s*\d+/.test(text)) continue;
+    let rest = text.replace(/^\s*(?:목\s*차|차\s*례)\s*/, '')
+      .replace(/[-—–]\s*\d+\s*[-—–]\s*$/, '').trim();
+    while (rest) {
+      const heading = /^(◈|□)\s*([^◈□]+?)(?=\s+\d{1,3}\.\s|\s*[◈□]|$)/.exec(rest);
+      if (heading) {
+        if (heading[1] === '◈') {
+          team = heading[2].trim();
+          category = team;
+        } else {
+          category = heading[2].trim();
+        }
+        rest = rest.slice(heading[0].length).trim();
+        continue;
+      }
+      const row = /^(\d{1,3})\.\s+([^◈□]+?)\s*(?:[·.]{3,}|…+)\s*(\d{1,4})(?=\s|$)/.exec(rest);
+      if (!row || !team || Number(row[1]) !== items.length + 1 || Number(row[3]) < 1) return [];
+      items.push({
+        id: Number(row[1]), team, category, officer: '', title: row[2].trim(),
+        docPage: row[3], startPdfPage: printedToPdfMap[Number(row[3])] || null,
+        tocPage: page.pageNum, settle: '', explain: '', attach: '', opinion: ''
+      });
+      rest = rest.slice(row[0].length).trim();
+    }
+  }
+  return items.length >= 2 ? items : [];
+}
+
 // Built-in intelligent client-side text parser (when AI key is not set or failed)
 // Three-column TOCs have no page column: [번호 | 예상질의·답변 | 담당자].
 // Parse complete rows so headers and the previous row's officer cannot enter a title.
@@ -828,6 +864,8 @@ function parseQuestionsHeuristic(pageTexts, structure) {
   if (auditItems.length) return auditItems;
   const officerItems = parseOfficerToc(pageTexts, structure);
   if (officerItems.length) return officerItems;
+  const dottedItems = parseDottedToc(pageTexts, structure);
+  if (dottedItems.length) return dottedItems;
 
   // 1. Check if TOC matches standard 4-column Table format (e.g. 재무결산 질의서)
   const targetPages = (structure.tocPages && structure.tocPages.length > 0)
@@ -1062,6 +1100,7 @@ async function parseUploadedPdf(pdfDoc, fileName) {
   let rawParsedItems = parseGroupedAuditToc(pageTexts, structure);
   if (!rawParsedItems.length) rawParsedItems = parseAuditToc(pageTexts, structure);
   if (!rawParsedItems.length) rawParsedItems = parseOfficerToc(pageTexts, structure);
+  if (!rawParsedItems.length) rawParsedItems = parseDottedToc(pageTexts, structure);
 
   // 3. AI Parsing with Multi-Model Fallback (3.5-flash-lite -> 3.5-flash -> flash-latest)
   if (geminiApiKey && rawParsedItems.length === 0) {

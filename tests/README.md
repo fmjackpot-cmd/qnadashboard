@@ -42,6 +42,7 @@ Windows PowerShell에서 `pnpm`을 찾지 못하면 프로젝트 폴더에서 �
 - 회의 테스트는 서버 핸들러와 복수 이용자 세션을 함께 실행해 자유 탐색, 관리자 우선 전환, 동일 문항 재전송, 재연결, 회의 격리 및 관리자 인증을 검사합니다. Ably 테스트는 반복 HTTP 요청 없음, 수신 전용 토큰, SDK 연결 종료·갱신·복구, 오래된 스냅샷 방지 및 문서 로딩 중 최신 이벤트 적용을 검사합니다. 실제 Ably 연결과 Netlify Blobs는 키 설정·배포 후 두 기기로 확인해야 합니다.
 
 - 단위·회귀 테스트: `node --test tests/parser.test.cjs`
+- 점선 목차 회귀 테스트: `node --test tests/dotted-toc.test.cjs`. `◈ 팀명`, `□ 주제명`, `번호. 제목 ··· 시작 쪽수` 형식을 별도로 인식합니다. 2026년 3추 첨부본의 PDF.js 추출 텍스트로 8개 문항의 시작·끝·표시 쪽수, 참고자료 포함, 팀·주제 전환과 AI 키 유무를 검사합니다.
 - 실제 PDF 통합 테스트: `node tests/pdf-integration.cjs <pdf.js-3.11.174의-pdf.cjs-절대경로> <pdf.worker.cjs-절대경로>`
 - 통합 검증에 필요한 원본 PDF 2개는 `tests/fixtures/pdfs/`에 보관합니다. 그 외 참고 PDF는 로컬의 `local-archive/reference-pdfs/`로 옮겼으며 Git과 배포 패키지에는 포함하지 않습니다.
 - PDF.js는 index.html과 같은 3.11.174 버전을 사용합니다. CDN의 pdf.min.js와 pdf.worker.min.js를 각각 .cjs 파일로 저장해 경로를 전달합니다.
