@@ -1,4 +1,4 @@
-param([int]$Port = 8888)
+param([ValidateRange(1, 65535)][int]$Port = 8888)
 $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path -Parent $PSScriptRoot
 $taskNode = Join-Path $taskRoot 'runtime/node.exe'
@@ -32,6 +32,19 @@ if (-not (Test-Path -LiteralPath (Join-Path $taskRoot 'netlify-deploy/index.html
     if (-not (Test-Path -LiteralPath $taskBuild)) { throw 'The dashboard build is missing. Re-extract the Windows package.' }
     & $taskNode $taskBuild lan
     if ($LASTEXITCODE -ne 0) { throw 'Dashboard build failed.' }
+}
+$taskListeners = Get-NetTCPConnection -State Listen | Where-Object { $_.LocalPort -eq $Port }
+foreach ($taskListenerId in ($taskListeners.OwningProcess | Sort-Object -Unique)) {
+    if ($taskListenerId -le 4 -or $taskListenerId -eq $PID) {
+        throw "Port $Port belongs to a protected process (PID $taskListenerId)."
+    }
+    $taskListenerProcess = Get-Process -Id $taskListenerId -ErrorAction SilentlyContinue
+    if (-not $taskListenerProcess) { continue }
+    Write-Host "Stopping $($taskListenerProcess.ProcessName) (PID $taskListenerId) on TCP port $Port."
+    Stop-Process -InputObject $taskListenerProcess -Force
+    if (-not $taskListenerProcess.WaitForExit(5000)) {
+        throw "Process $taskListenerId did not exit. Port $Port is still in use."
+    }
 }
 Write-Host 'Keep this window open. Press Ctrl+C to stop the server.'
 Write-Host 'Give other computers the LAN address printed below. Participants select an open meeting.'
