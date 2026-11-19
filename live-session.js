@@ -53,12 +53,12 @@
       this.applyQueue = Promise.resolve();
     }
 
-    async join(room, key = '') {
+    async join(room, key = '', { create = false } = {}) {
       this.leave();
       this.controllerId = root.crypto?.randomUUID?.() || `admin-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const generation = this.generation;
       if (!/^[a-zA-Z0-9가-힣ㄱ-ㅎㅏ-ㅣ _-]{1,64}$/.test(room)) throw new Error('회의 이름은 한글·영문·숫자·공백·밑줄·하이픈 1~64자로 입력해주세요.');
-      if (key) await this.request(room, { action: 'authenticate' }, key);
+      if (key) await this.request(room, { action: 'authenticate', ...(create && { create: true }) }, key);
       if (generation !== this.generation) return;
       Object.assign(this, { active: true, room, key, role: key ? 'admin' : 'viewer', lastRevision: null,
         lastState: null, pendingState: null, sharedDocument: null, latestSequence: 0, browsing: false, connectionLost: false, initialMessageSync: true });
@@ -509,7 +509,7 @@
       return url.href;
     };
     const join = async (room, key, file, create = false) => {
-      await session.join(room, key);
+      await session.join(room, key, { create });
       if (!session.active) return;
       if (key) {
         try {

@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
-import { roomPattern, maxAge } from './meeting.mjs';
+import { roomPattern, isOpenMeeting } from './meeting.mjs';
 
 export const config = {
   path: '/.netlify/functions/meeting-supervisor',
@@ -20,7 +20,7 @@ export function createSupervisorHandler({ store, broker, key, scope = '', now = 
   const sign = value => createHmac('sha256', key).update('meeting-supervisor:' + scope + ':' + value).digest('base64url');
   const cookie = (value, seconds) => cookieName + '=' + value +
     '; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=' + seconds;
-  const open = state => state?.document && !state.closed && now() - state.updatedAt < maxAge;
+  const open = state => isOpenMeeting(state, now());
 
   return async request => {
     if (!key || key.length < 6) return json({ error: '서버에 6자 이상의 MEETING_SUPERVISOR_KEY를 설정해주세요.' }, 503);

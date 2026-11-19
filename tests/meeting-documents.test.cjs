@@ -402,6 +402,15 @@ test('Korean room names upload and retrieve their PDF; creation cannot overwrite
   assert.equal(response.status, 200);
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), Buffer.from(await source.arrayBuffer()));
   assert.equal((await f.request(room)).state.documentId, document.id);
-  await assert.rejects(f.request(room, create, adminKey), /이미 개설/);
+  const checkName = { action: 'authenticate', create: true };
+  await assert.rejects(f.request(room, checkName, adminKey), /현재 열려 있는/);
+  await assert.rejects(f.request(room, create, adminKey), /현재 열려 있는/);
+  f.advance(12 * 60 * 60 * 1000);
+  assert.equal((await f.request(room)).state, null);
+  assert.equal((await f.request(room, checkName, adminKey)).authenticated, true);
+  const newDocument = (await f.uploadFile(room, pdf('새 회의 자료'), adminKey)).document;
+  const reopened = await f.request(room, { ...create, fileId: newDocument.fileId, documentId: newDocument.id }, adminKey);
+  assert.equal(reopened.state.documentId, newDocument.id);
+  assert.equal(reopened.state.sequence, opened.state.sequence + 1);
   assert.equal((await f.request('legacy-room_2026')).state, null);
 });

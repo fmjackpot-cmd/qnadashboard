@@ -97,6 +97,7 @@ for (const room of ['audit-2026', '2026 감사 회의']) test('meeting form auth
   assert.equal(elements.get('meeting-open').dataset.state, 'admin');
   assert.match(elements.get('meeting-open').title, /관리자 제어 중/);
   assert.equal(writes[0].body.action, 'authenticate');
+  assert.equal(writes[0].body.create, true);
   assert.equal(writes[2].body, pdf);
   assert.equal(writes[2].headers['X-Document-Type'], 'receipt');
   assert.equal(writes[3].body.action, 'create-document');

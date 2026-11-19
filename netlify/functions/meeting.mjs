@@ -14,7 +14,9 @@ const json = (data, status = 200) => new Response(JSON.stringify(data), {
 });
 const digest = value => createHash('sha256').update(value).digest();
 export const roomPattern = /^[a-zA-Z0-9가-힣ㄱ-ㅎㅏ-ㅣ _-]{1,64}$/;
-export const maxAge = 12 * 60 * 60 * 1000;
+const maxAge = 12 * 60 * 60 * 1000;
+export const isOpenMeeting = (state, time) => Boolean(state?.document && !state.closed && time - state.updatedAt < maxAge);
+const duplicateMeeting = () => json({ error: '현재 열려 있는 회의 이름입니다. 다른 이름으로 개설하거나 관리자로 참여해주세요.' }, 409);
 
 // Dependencies are injectable so authorization and persistence can be checked locally.
 export function createHandler({ store, documents, adminKey, broker, now = Date.now, revision = randomUUID }) {
@@ -49,8 +51,14 @@ export function createHandler({ store, documents, adminKey, broker, now = Date.n
       let body;
       try { body = JSON.parse(bodyText); } catch { return json({ error: '올바른 JSON 요청이 아닙니다.' }, bodyText.length > 2048 ? 413 : 400); }
       if (body?.action !== 'send-message' && bodyText.length > 2048) return json({ error: '요청이 너무 큽니다.' }, 413);
-      if (['authenticate', 'send-message'].includes(body?.action) && (await store.get(room, { type: 'json', consistency: 'strong' }))?.closed) return json({ error: '종료된 회의입니다. 새 회의 이름으로 개설해주세요.', closed: true }, 410);
-      if (body?.action === 'authenticate') return json({ authenticated: true });
+      if (['authenticate', 'send-message'].includes(body?.action)) {
+        const state = await store.get(room, { type: 'json', consistency: 'strong' });
+        if (state?.closed) return json({ error: '종료된 회의입니다. 새 회의 이름으로 개설해주세요.', closed: true }, 410);
+        if (body.action === 'authenticate') {
+          if (body.create === true && isOpenMeeting(state, now())) return duplicateMeeting();
+          return json({ authenticated: true });
+        }
+      }
       if (body?.action === 'send-message') {
         if (typeof body.text !== 'string' || body.text.length > 1000 || (!body.text.trim() && !body.attachmentId)) {
           return json({ error: '1~1,000자 메시지 또는 이미지·PDF를 첨부해주세요.' }, 400);
@@ -88,11 +96,11 @@ export function createHandler({ store, documents, adminKey, broker, now = Date.n
         ? await store.getWithMetadata(room, { type: 'json', consistency: 'strong' }) : null;
       const previous = store.getWithMetadata ? snapshot?.data : await store.get(room, { type: 'json', consistency: 'strong' });
       if (previous?.closed) return json({ error: '종료된 회의입니다. 새 회의 이름으로 개설해주세요.', closed: true }, 410);
-      if (previous?.controllerId && previous.controllerId !== body.controllerId && now() - previous.updatedAt < 2000) {
+      if (body.action === 'create-document' && isOpenMeeting(previous, now())) return duplicateMeeting();
+      if (body.action !== 'create-document' && previous?.controllerId && previous.controllerId !== body.controllerId && now() - previous.updatedAt < 2000) {
         return json({ error: '다른 관리자가 화면을 변경했습니다. 변경 후 2초가 지나면 다시 선택해주세요.', state: previous }, 409);
       }
       let document = previous?.document;
-      if (body.action === 'create-document' && previous) return json({ error: '이미 개설된 회의 이름입니다. 다른 이름으로 개설하거나 관리자로 참여해주세요.' }, 409);
       if (['set-document', 'create-document'].includes(body.action)) {
         if (!documents || !validFileId(body.fileId)) return json({ error: '먼저 회의 자료를 업로드해주세요.' }, 400);
         const entry = await documents.getMetadata(body.fileId, { consistency: 'strong' });
@@ -112,6 +120,7 @@ export function createHandler({ store, documents, adminKey, broker, now = Date.n
         ? (snapshot ? { onlyIfMatch: snapshot.etag } : { onlyIfNew: true }) : undefined);
       if (written?.modified === false) {
         const latest = await store.get(room, { type: 'json', consistency: 'strong' });
+        if (body.action === 'create-document' && isOpenMeeting(latest, now())) return duplicateMeeting();
         if (latest?.closed) return json({ error: '종료된 회의입니다. 새 회의 이름으로 개설해주세요.', closed: true }, 410);
         return json({ error: '다른 관리자가 먼저 화면을 변경했습니다. 최신 화면을 확인하고 다시 선택해주세요.', state: latest }, 409);
       }
