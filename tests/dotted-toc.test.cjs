@@ -67,3 +67,46 @@ test('leaves existing table layouts and incomplete leader rows to existing parse
     assert.equal(ctx.parseDottedToc([{ pageNum: 1, text }], { tocPages: [1] }).length, 0);
   }
 });
+
+test('tries Gemini before the four-column fallback and preserves its minimum row count', async () => {
+  for (const [key, success, count, expected] of [
+    ['key', true, 5, 'AI'], ['key', false, 5, '표'], ['', false, 5, '표'], ['', false, 4, '1쪽 내용']
+  ]) {
+    const ctx = parser();
+    vm.runInContext('geminiApiKey = ' + JSON.stringify(key), ctx);
+    ctx.extractAllPagesText = async () => [{pageNum:1, text:'순 질의 목록 페이지'}];
+    ctx.parseTableToc = () => Array.from({length:count}, () => ({title:'표'}));
+    let requests = 0;
+    ctx.fetch = async () => {
+      requests++;
+      return {ok:success, json:async () => ({candidates:[{content:{parts:[{text:'[{"title":"AI"}]'}]}}]})};
+    };
+    await ctx.parseUploadedPdf({numPages:1}, 'table.pdf');
+    assert.equal(vm.runInContext('currentItems[0].title', ctx), expected);
+    assert.equal(requests, key ? (success ? 1 : 3) : 0);
+  }
+});
+
+test('invalid grouped layout propagates to the upload loader and keeps the document unready', async () => {
+  const ctx = parser();
+  const source = fs.readFileSync(path.join(__dirname, '../app.js'), 'utf8');
+  vm.runInContext(source.slice(source.indexOf('async function loadPdfBufferNow'), source.indexOf('function processPdfFile')), ctx);
+  ctx.pdfjsLib = {getDocument: () => ({promise:Promise.resolve({numPages:1})})};
+  ctx.extractAllPagesText = async () => [{pageNum:1, text:'구분 순 제목 구분 쪽수'}];
+  ctx.analyzeDocumentStructure = () => ({tocPages:[1]});
+  ctx.console.error = () => {};
+  const messages = [];
+  ctx.alert = message => messages.push(message);
+  assert.equal(await ctx.loadPdfBufferNow(new ArrayBuffer(1), 'invalid.pdf'), false);
+  assert.match(messages[0], /목차 표의 위치 정보를 읽지 못했습니다/);
+  assert.equal(vm.runInContext('meetingDocument.ready', ctx), false);
+});
+
+test('numbered contents with empty page cells display only their own question titles', async () => {
+  const ctx = parser();
+  ctx.extractAllPagesText = async () => [{pageNum:1, text:'목차 ◈ 학생배치팀 □ 연도별 1. 2024년 집행 현황은? ··· 2. 두 번째 사업의 규모는? ··· 3. 다음 사업의 계획은? ··· 2'}];
+  ctx.analyzeDocumentStructure = () => ({tocPages:[1]});
+  await ctx.parseUploadedPdf({numPages:2}, 'numbered.pdf');
+  assert.deepEqual(Array.from(vm.runInContext('currentItems', ctx), row => row.title),
+    ['2024년 집행 현황은?', '두 번째 사업의 규모는?', '다음 사업의 계획은?']);
+});

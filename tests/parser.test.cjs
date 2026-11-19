@@ -103,3 +103,27 @@ test('recovers a leading printed footer when PDF coordinates are misplaced', asy
   const pages = await ctx.extractAllPagesText({numPages:1, getPage:async () => page});
   assert.equal(pages[0].printedPage, 25);
 });
+
+test('honors printed page numbers when body text has no matching title', () => {
+  const ctx = parser();
+  vm.runInContext('printedToPdfMap = {17:3}; pdfToPrintedMap = {2:16,3:17}', ctx);
+  const pages = ['목차', '본문 일반 내용 '.repeat(8), '본문 상세 내용 '.repeat(8)].map(text => ({text}));
+  const [row] = ctx.locateQuestionsByContent([{id:1, title:'학교 배치 계획', docPage:'17'}], {numPages:3}, pages, [1]);
+  assert.deepEqual([row.startPdfPage, row.endPdfPage, row.docPage, row.pageCount], [3,3,'17',1]);
+});
+
+test('repairs repeated and stale TOC pages only for unique body headings', () => {
+  const ctx = parser();
+  vm.runInContext('printedToPdfMap = {1:2,2:3,3:4,4:5}', ctx);
+  const a = '학교 급식 지원 계획은?', b = '교실 증축 사업 현황은?';
+  const pages = ['목차', '질의요지 '+a+' 답변내용 급식 현황', '급식 지원에 대한 계속 답변입니다.', '질의요지 '+b+' 답변내용 증축 계획', '추가 설명 자료'].map(text => ({text}));
+  function starts(first, second) {
+    const items = [{id:1,title:a,docPage:first},{id:2,title:b,docPage:second}];
+    return Array.from(ctx.locateQuestionsByContent(items,{numPages:5},pages,[1]), row => row.startPdfPage);
+  }
+  assert.deepEqual(starts('1','1'), [2,4]);
+  assert.deepEqual(starts('2','4'), [2,4]);
+  pages[1].text += ' 질의요지 '+b+' 답변내용';
+  assert.deepEqual(starts('1','1'), [2,2]);
+  assert.deepEqual(starts('1','4'), [2,5]);
+});

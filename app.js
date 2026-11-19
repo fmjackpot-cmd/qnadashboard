@@ -316,7 +316,7 @@ function analyzeDocumentStructure(pageTexts) {
     const text = pageObj.text;
     const hasTocTitle = /목\s*차|차\s*례|질의\s*목록|질의\s*순서/i.test(text);
     const qMatches = text.match(/[?？]|\b문항\s*\d+|\b질의\s*\d+/g) || [];
-    
+
     // Page is considered TOC if it has TOC title OR has >= 3 questions in a single page
     const isAnswerPage = /[【\[]\s*\d+\s*[】\]][\s\S]*【\s*답\s*변\s*】/.test(text);
     if (isGroupedAuditToc(text) || (!isAnswerPage && (hasTocTitle || qMatches.length >= 3))) {
@@ -338,19 +338,7 @@ function analyzeDocumentStructure(pageTexts) {
 // 3. Significant phrase / token overlap ratio (+150~450 pts)
 // 4. Bracketed question number pattern (+300 pts)
 // 5. Sequential monotonicity constraint (page N >= page N-1)
-function locateQuestionsByContent(items, pdfDoc, pageTexts, detectedTocPages) {
-  if (!items || items.length === 0) return [];
-
-  const lastToc = (detectedTocPages && detectedTocPages.length > 0) ? Math.max(...detectedTocPages) : 0;
-  // Exclude TOC and cover pages from body search
-  let searchStart = Math.max(1, lastToc + 1);
-
-  // Skip any nearly blank transition pages
-  while (searchStart <= pdfDoc.numPages && (pageTexts[searchStart - 1]?.text || "").replace(/[^가-힣a-zA-Z0-9]/g, '').length < 15) {
-    searchStart++;
-  }
-
-  // 1. Pre-process and cache normalized text for all pages
+function buildQuestionPageIndex(pdfDoc, pageTexts) {
   const pageCache = [];
   for (let p = 1; p <= pdfDoc.numPages; p++) {
     const rawText = pageTexts[p - 1]?.text || "";
@@ -372,162 +360,162 @@ function locateQuestionsByContent(items, pdfDoc, pageTexts, detectedTocPages) {
       rawText: rawText,
       cleanNoSpace: cleanNoSpace,
       headerCleanNoSpace: headerCleanNoSpace,
+      headingText: headerCleanNoSpace.replace(/[^가-힣a-zA-Z0-9]/g, ''),
       summaryClean,
       isTableHeavy: isTableHeavy
     });
   }
+  return pageCache;
+}
 
-  // Common stopwords to exclude from token overlap
-  const stopWords = new Set([
-    "현황은", "사유는", "대책은", "계획은", "의견은", "방안은", 
-    "최근", "대한", "관련", "따른", "기준", "운영", "지원", 
-    "내역은", "이유는", "결과는", "사업", "추진", "어떠한가", "무엇인가"
-  ]);
+// Common stopwords to exclude from token overlap
+const questionTitleStopWords = new Set([
+  "현황은", "사유는", "대책은", "계획은", "의견은", "방안은",
+  "최근", "대한", "관련", "따른", "기준", "운영", "지원",
+  "내역은", "이유는", "결과는", "사업", "추진", "어떠한가", "무엇인가"
+]);
 
-  const locatedItems = [];
-  let prevFoundPage = searchStart;
+function prepareQuestionTitle(item, qId) {
+  const originalTitle = (item.title || "").trim();
 
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    const qId = Number(item.id) || (i + 1);
-    const originalTitle = (item.title || "").trim();
+  // Strip any residual leading question numbers, bullets, noise from title
+  let pureTitle = originalTitle;
+  pureTitle = pureTitle.replace(/^(?:【\s*(?:문항\s*)?\d+\s*】|\[\s*문항\s*\d+\s*\]|\d{1,3}[.)]\s+)?\s*[○●■▶]?\s*/, '').trim();
+  if (!pureTitle) pureTitle = originalTitle;
+  item.title = pureTitle; // Update item title to purified title
 
-    // Strip any residual leading question numbers, bullets, noise from title
-    let pureTitle = originalTitle;
-    pureTitle = pureTitle.replace(/^(?:【\s*(?:문항\s*)?\d+\s*】|\[\s*문항\s*\d+\s*\]|\d{1,3}[.)]\s+)?\s*[○●■▶]?\s*/, '').trim();
-    if (!pureTitle) pureTitle = originalTitle;
-    item.title = pureTitle; // Update item title to purified title
+  // Clean title with no whitespace and no punctuation
+  // Planning-period labels are TOC metadata and may be absent from body headings.
+  const matchTitle = pureTitle.replace(/^\(\s*중기\s*\)\s*/, '');
+  const titleNoSpace = matchTitle.replace(/[\s\(\)\[\]\.\,\?\!\-_·ㆍ•「」『』<>\/\\~○●■▶◆\:\;]/g, '');
 
-    // Clean title with no whitespace and no punctuation
-    // Planning-period labels are TOC metadata and may be absent from body headings.
-    const matchTitle = pureTitle.replace(/^\(\s*중기\s*\)\s*/, '');
-    const titleNoSpace = matchTitle.replace(/[\s\(\)\[\]\.\,\?\!\-_·ㆍ•「」『』<>\/\\~○●■▶◆\:\;]/g, '');
+  // Title token words (length >= 2, non-stopwords)
+  const titleTokens = matchTitle
+    .replace(/[\s\(\)\[\]\.\,\?\!\-_·ㆍ•「」『』<>\/\\~○●■▶◆\:\;]/g, ' ')
+    .split(' ')
+    .filter(w => w.length >= 2 && !questionTitleStopWords.has(w));
 
-    // Title token words (length >= 2, non-stopwords)
-    const titleTokens = matchTitle
-      .replace(/[\s\(\)\[\]\.\,\?\!\-_·ㆍ•「」『』<>\/\\~○●■▶◆\:\;]/g, ' ')
-      .split(' ')
-      .filter(w => w.length >= 2 && !stopWords.has(w));
+  // Salient prefix phrase (first 8~12 chars)
+  const prefixSnippet = titleNoSpace.length >= 8
+    ? titleNoSpace.substring(0, Math.min(12, titleNoSpace.length))
+    : titleNoSpace;
+  const midSnippet = titleNoSpace.length >= 16
+    ? titleNoSpace.substring(4, 14)
+    : "";
 
-    // Salient prefix phrase (first 8~12 chars)
-    const prefixSnippet = titleNoSpace.length >= 8 
-      ? titleNoSpace.substring(0, Math.min(12, titleNoSpace.length)) 
-      : titleNoSpace;
-    const midSnippet = titleNoSpace.length >= 16 
-      ? titleNoSpace.substring(4, 14) 
-      : "";
+  // Bracket patterns for question number
+  const bracketRegex = new RegExp(`【\\s*${qId}\\s*】|\\[\\s*문항\\s*${qId}\\s*\\]|【\\s*문항\\s*${qId}\\s*】|\\b문항\\s*${qId}\\b`, 'i');
+  return { originalTitle, titleNoSpace, titleTokens, prefixSnippet, midSnippet, bracketRegex };
+}
 
-    // Bracket patterns for question number
-    const bracketRegex = new RegExp(`【\\s*${qId}\\s*】|\\[\\s*문항\\s*${qId}\\s*\\]|【\\s*문항\\s*${qId}\\s*】|\\b문항\\s*${qId}\\b`, 'i');
-    // If item was already directly mapped via printedToPdfMap from TOC, honor it directly!
-    let foundPage = null;
-    let bestPage = null;
-    let highestScore = 0;
-    const pageSearchStart = Math.max(searchStart, prevFoundPage);
+function scoreQuestionPage(pageInfo, title) {
+  const { titleNoSpace, titleTokens, prefixSnippet, midSnippet, bracketRegex } = title;
+  let score = 0;
 
-    if (item.startPdfPage && item.startPdfPage >= searchStart && item.startPdfPage <= pdfDoc.numPages) {
-      foundPage = item.startPdfPage;
-      console.log(`Question ${qId} ("${originalTitle.substring(0, 15)}...") directly mapped to PDF page ${foundPage} via printed page ${item.docPage}`);
-    } else if (item.docPage && !isNaN(parseInt(item.docPage, 10)) && printedToPdfMap[parseInt(item.docPage, 10)]) {
-      foundPage = printedToPdfMap[parseInt(item.docPage, 10)];
-      console.log(`Question ${qId} ("${originalTitle.substring(0, 15)}...") mapped to PDF page ${foundPage} via docPage ${item.docPage}`);
-    } else {
-      for (let p = pageSearchStart; p <= pdfDoc.numPages; p++) {
-        const pageInfo = pageCache[p - 1];
-        if (!pageInfo || pageInfo.cleanNoSpace.length < 20) continue;
+  // Body summaries sometimes omit the school name used in the TOC.
+  // An explicit question heading is stronger evidence than shared answer keywords.
+  const normalizedTitle = titleNoSpace.replace(/[^가-힣a-zA-Z0-9]/g, '');
+  if (pageInfo.summaryClean.length >= 6 && normalizedTitle.endsWith(pageInfo.summaryClean)) {
+    score += 1600;
+  }
 
-        let score = 0;
+  // Tier 1: Complete title match (ignoring whitespace and punctuation)
+  if (titleNoSpace.length >= 5 && pageInfo.cleanNoSpace.includes(titleNoSpace)) {
+    score += 1000;
+    if (pageInfo.headerCleanNoSpace.includes(titleNoSpace)) {
+      score += 500;
+    }
+  }
 
-        // Body summaries sometimes omit the school name used in the TOC.
-        // An explicit question heading is stronger evidence than shared answer keywords.
-        const normalizedTitle = titleNoSpace.replace(/[^가-힣a-zA-Z0-9]/g, '');
-        if (pageInfo.summaryClean.length >= 6 && normalizedTitle.endsWith(pageInfo.summaryClean)) {
-          score += 1600;
+  // Tier 2: Salient prefix phrase match (first 8~12 characters)
+  if (prefixSnippet.length >= 6 && pageInfo.cleanNoSpace.includes(prefixSnippet)) {
+    score += 400;
+    if (pageInfo.headerCleanNoSpace.includes(prefixSnippet)) {
+      score += 300;
+    }
+  }
+
+  // Tier 3: Middle salient phrase match
+  if (midSnippet.length >= 6 && pageInfo.cleanNoSpace.includes(midSnippet)) {
+    score += 250;
+  }
+
+  // Tier 4: Significant token overlap
+  if (titleTokens.length > 0) {
+    let matchCount = 0;
+    let headerMatchCount = 0;
+    for (const token of titleTokens) {
+      if (pageInfo.cleanNoSpace.includes(token)) {
+        matchCount++;
+        if (pageInfo.headerCleanNoSpace.includes(token)) {
+          headerMatchCount++;
         }
-
-        // Tier 1: Complete title match (ignoring whitespace and punctuation)
-        if (titleNoSpace.length >= 5 && pageInfo.cleanNoSpace.includes(titleNoSpace)) {
-          score += 1000;
-          if (pageInfo.headerCleanNoSpace.includes(titleNoSpace)) {
-            score += 500;
-          }
-        }
-
-        // Tier 2: Salient prefix phrase match (first 8~12 characters)
-        if (prefixSnippet.length >= 6 && pageInfo.cleanNoSpace.includes(prefixSnippet)) {
-          score += 400;
-          if (pageInfo.headerCleanNoSpace.includes(prefixSnippet)) {
-            score += 300;
-          }
-        }
-
-        // Tier 3: Middle salient phrase match
-        if (midSnippet.length >= 6 && pageInfo.cleanNoSpace.includes(midSnippet)) {
-          score += 250;
-        }
-
-        // Tier 4: Significant token overlap
-        if (titleTokens.length > 0) {
-          let matchCount = 0;
-          let headerMatchCount = 0;
-          for (const token of titleTokens) {
-            if (pageInfo.cleanNoSpace.includes(token)) {
-              matchCount++;
-              if (pageInfo.headerCleanNoSpace.includes(token)) {
-                headerMatchCount++;
-              }
-            }
-          }
-
-          const matchRatio = matchCount / titleTokens.length;
-          if (matchRatio >= 0.8) score += 400;
-          else if (matchRatio >= 0.5) score += 250;
-          else if (matchRatio >= 0.3 && matchCount >= 2) score += 120;
-
-          score += headerMatchCount * 100;
-        }
-
-        // Tier 5: Bracketed question number match
-        if (bracketRegex.test(pageInfo.rawText)) {
-          score += 400;
-        }
-
-        // Anti-false-positive: Penalize pages that are data-heavy tables if title is not in the header
-        if (pageInfo.isTableHeavy && !pageInfo.headerCleanNoSpace.includes(prefixSnippet)) {
-          score -= 500;
-        }
-
-        // Track highest scoring page
-        if (score > highestScore) {
-          highestScore = score;
-          bestPage = p;
-        }
-
-        if (score >= 1200) {
-          break;
-        }
-      }
-
-      // Minimum confidence threshold: 220 points
-      if (highestScore >= 220 && bestPage !== null) {
-        foundPage = bestPage;
-        console.log(`Question ${qId} ("${originalTitle.substring(0, 15)}...") matched to PDF page ${foundPage} (score: ${highestScore})`);
-      } else {
-        foundPage = Math.min(pdfDoc.numPages, prevFoundPage);
-        console.warn(`Question ${qId} ("${originalTitle.substring(0, 15)}...") low match score (${highestScore}), placed at PDF page ${foundPage}`);
       }
     }
 
-    prevFoundPage = foundPage;
+    const matchRatio = matchCount / titleTokens.length;
+    if (matchRatio >= 0.8) score += 400;
+    else if (matchRatio >= 0.5) score += 250;
+    else if (matchRatio >= 0.3 && matchCount >= 2) score += 120;
 
-    locatedItems.push({
-      ...item,
-      id: qId,
-      startPdfPage: foundPage
-    });
+    score += headerMatchCount * 100;
   }
 
-  // 3. Compute accurate endPdfPage and pageCount
+  // Tier 5: Bracketed question number match
+  if (bracketRegex.test(pageInfo.rawText)) {
+    score += 400;
+  }
+
+  // Anti-false-positive: Penalize pages that are data-heavy tables if title is not in the header
+  if (pageInfo.isTableHeavy && !pageInfo.headerCleanNoSpace.includes(prefixSnippet)) {
+    score -= 500;
+  }
+  return score;
+}
+
+function findQuestionPage(item, qId, title, pageCache, searchStart, prevFoundPage, printedToPdfMap) {
+  const { originalTitle } = title;
+  // If item was already directly mapped via printedToPdfMap from TOC, honor it directly!
+  let foundPage = null;
+  let bestPage = null;
+  let highestScore = 0;
+  const pageSearchStart = Math.max(searchStart, prevFoundPage);
+
+  if (item.startPdfPage && item.startPdfPage >= searchStart && item.startPdfPage <= pageCache.length) {
+    foundPage = item.startPdfPage;
+    console.log(`Question ${qId} ("${originalTitle.substring(0, 15)}...") directly mapped to PDF page ${foundPage} via printed page ${item.docPage}`);
+  } else if (item.docPage && !isNaN(parseInt(item.docPage, 10)) && printedToPdfMap[parseInt(item.docPage, 10)]) {
+    foundPage = printedToPdfMap[parseInt(item.docPage, 10)];
+    console.log(`Question ${qId} ("${originalTitle.substring(0, 15)}...") mapped to PDF page ${foundPage} via docPage ${item.docPage}`);
+  } else {
+    for (let p = pageSearchStart; p <= pageCache.length; p++) {
+      const pageInfo = pageCache[p - 1];
+      if (!pageInfo || pageInfo.cleanNoSpace.length < 20) continue;
+      const score = scoreQuestionPage(pageInfo, title);
+      // Track highest scoring page
+      if (score > highestScore) {
+        highestScore = score;
+        bestPage = p;
+      }
+
+      if (score >= 1200) {
+        break;
+      }
+    }
+
+    // Minimum confidence threshold: 220 points
+    if (highestScore >= 220 && bestPage !== null) {
+      foundPage = bestPage;
+      console.log(`Question ${qId} ("${originalTitle.substring(0, 15)}...") matched to PDF page ${foundPage} (score: ${highestScore})`);
+    } else {
+      foundPage = Math.min(pageCache.length, prevFoundPage);
+      console.warn(`Question ${qId} ("${originalTitle.substring(0, 15)}...") low match score (${highestScore}), placed at PDF page ${foundPage}`);
+    }
+  }
+  return foundPage;
+}
+
+function assignQuestionPageRanges(locatedItems, pdfDoc, pdfToPrintedMap) {
   for (let i = 0; i < locatedItems.length; i++) {
     const curr = locatedItems[i];
     const next = locatedItems[i + 1];
@@ -575,7 +563,66 @@ function locateQuestionsByContent(items, pdfDoc, pageTexts, detectedTocPages) {
       ? `PDF ${curr.startPdfPage}p`
       : `PDF ${curr.startPdfPage}~${curr.endPdfPage}p`;
   }
+}
 
+function verifyPrintedQuestionPage(mappedPage, title, pageCache, firstBodyPage) {
+  const key = title.titleNoSpace.replace(/[^가-힣a-zA-Z0-9]/g, '');
+  if (key.length < 6) return mappedPage;
+  // Require a heading boundary. A repeated title in an answer can be a reference.
+  const matches = page => page.summaryClean === key ||
+    page.headingText.startsWith(key) ||
+    page.headingText.includes('질의요지' + key) ||
+    page.headingText.includes('문항' + title.questionNumber + key) ||
+    page.headerCleanNoSpace.startsWith('【' + title.questionNumber + '】' + title.titleNoSpace);
+  if (pageCache[mappedPage - 1] && matches(pageCache[mappedPage - 1])) return mappedPage;
+  let candidate = null;
+  for (let p = firstBodyPage; p <= pageCache.length; p++) {
+    if (!matches(pageCache[p - 1])) continue;
+    if (candidate !== null) return mappedPage;
+    candidate = p;
+  }
+  if (candidate !== null) console.warn(`Question ${title.questionNumber}: corrected PDF page ${mappedPage} → ${candidate}`);
+  return candidate ?? mappedPage;
+}
+
+const tocRowTitle = Symbol('tocRowTitle');
+
+function locateQuestionsByContent(items, pdfDoc, pageTexts, detectedTocPages) {
+  if (!items || items.length === 0) return [];
+
+  const lastToc = (detectedTocPages && detectedTocPages.length > 0) ? Math.max(...detectedTocPages) : 0;
+  // Exclude TOC and cover pages from body search
+  let searchStart = Math.max(1, lastToc + 1);
+
+  // Skip any nearly blank transition pages
+  while (searchStart <= pdfDoc.numPages && (pageTexts[searchStart - 1]?.text || "").replace(/[^가-힣a-zA-Z0-9]/g, '').length < 15) {
+    searchStart++;
+  }
+  const pageCache = buildQuestionPageIndex(pdfDoc, pageTexts);
+  const groupedAudit = (detectedTocPages || []).some(p => isGroupedAuditToc(pageTexts[p - 1]?.text));
+  const locatedItems = [];
+  let prevFoundPage = searchStart;
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const qId = Number(item.id) || (i + 1);
+    const title = prepareQuestionTitle(item, qId);
+    let foundPage = findQuestionPage(item, qId, title, pageCache, searchStart, prevFoundPage, printedToPdfMap);
+    if (!groupedAudit && printedToPdfMap[parseInt(item.docPage, 10)] === foundPage) {
+      title.questionNumber = item.categoryNumber || qId;
+      foundPage = verifyPrintedQuestionPage(foundPage, title, pageCache, lastToc + 1);
+    }
+    prevFoundPage = foundPage;
+
+    const { [tocRowTitle]: displayTitle, ...locatedItem } = item;
+    locatedItems.push({
+      ...locatedItem,
+      id: qId,
+      title: displayTitle || item.title,
+      startPdfPage: foundPage
+    });
+  }
+  assignQuestionPageRanges(locatedItems, pdfDoc, pdfToPrintedMap);
   return locatedItems;
 }
 
@@ -857,15 +904,22 @@ function parseAuditToc(pageTexts, structure) {
   return items;
 }
 
-function parseQuestionsHeuristic(pageTexts, structure) {
+function parseExplicitQuestionLayout(pageTexts, structure) {
   const groupedItems = parseGroupedAuditToc(pageTexts, structure);
   if (groupedItems.length) return groupedItems;
   const auditItems = parseAuditToc(pageTexts, structure);
   if (auditItems.length) return auditItems;
   const officerItems = parseOfficerToc(pageTexts, structure);
   if (officerItems.length) return officerItems;
-  const dottedItems = parseDottedToc(pageTexts, structure);
-  if (dottedItems.length) return dottedItems;
+  return parseDottedToc(pageTexts, structure);
+}
+
+function parseQuestionsHeuristic(pageTexts, structure) {
+  const items = parseExplicitQuestionLayout(pageTexts, structure);
+  return items.length ? items : parseRemainingQuestionLayouts(pageTexts, structure);
+}
+
+function parseRemainingQuestionLayouts(pageTexts, structure) {
 
   // 1. Check if TOC matches standard 4-column Table format (e.g. 재무결산 질의서)
   const targetPages = (structure.tocPages && structure.tocPages.length > 0)
@@ -892,6 +946,11 @@ function parseQuestionsHeuristic(pageTexts, structure) {
 
   for (const pageObj of targetPages) {
     const text = pageObj.text || "";
+    // In numbered leader-dot contents, the row number starts the title even
+    // when the preceding row has no page number. Keep the original chunks for
+    // page references and metadata, which can occur outside the title.
+    const numberedContents = (structure.tocPages || []).includes(pageObj.pageNum) &&
+      /(?:[·.]{3,}|…+)/.test(text) && /(?:^|\s)\d{1,3}\.\s+/.test(text);
     // Split into chunks by question marks, bracketed items, or linebreaks
     const chunks = text.split(/(?<=[?？])|(?=\[문항\s*\d+\])|\r?\n/);
 
@@ -909,11 +968,12 @@ function parseQuestionsHeuristic(pageTexts, structure) {
 
       // Check if chunk is a question (ends with ? or contains 【X】 or [문항 X])
       const isQuestion = /[?？]$/.test(line) || /【\s*\d+\s*】/.test(line) || /\[문항\s*\d+\]/i.test(line);
-      
+
       if (isQuestion && line.length >= 6) {
         // Strip table noise, author names, team names, bullet symbols before question title
+        const rowStart = numberedContents && new RegExp(`(?:^|\\s)${questionCounter}\\.\\s+`).exec(line);
         let cleanTitle = line;
-        
+
         // If line has '○', the question starts right after '○'
         if (cleanTitle.includes('○')) {
           cleanTitle = cleanTitle.substring(cleanTitle.indexOf('○') + 1);
@@ -977,6 +1037,7 @@ function parseQuestionsHeuristic(pageTexts, structure) {
             category: currentCategory || "질의 문항",
             officer: officer,
             title: cleanTitle,
+            [tocRowTitle]: rowStart ? line.slice(rowStart.index + rowStart[0].length).replace(/\s+/g, " ").trim() : undefined,
             docPage: docPage,
             startPdfPage: startPdfPage,
             tocPage: pageObj.pageNum,
@@ -1073,54 +1134,24 @@ function parseReceiptToc(pageTexts) {
 // 3. AI-BASED PARSER (Multi-Model Resilient Fallback)
 // ==========================================================================
 
-async function parseUploadedPdf(pdfDoc, fileName) {
-  const loadingOverlay = document.getElementById('ai-loading-overlay');
-  const loadingTitle = document.getElementById('ai-loading-title');
-  const loadingDesc = document.getElementById('ai-loading-desc');
+async function parseQuestionsWithGemini(pdfDoc, pageTexts, structure, loadingTitle, loadingDesc) {
+  const candidateModels = [
+    "gemini-3.5-flash-lite",
+    "gemini-3.5-flash",
+    "gemini-flash-latest"
+  ];
 
-  if (loadingOverlay) loadingOverlay.style.display = 'flex';
-  if (loadingTitle) loadingTitle.innerText = "PDF 전체 텍스트 및 구조 분석 중...";
-  if (loadingDesc) loadingDesc.innerText = "문서의 표지, 목차, 질문 목록 및 본문 쪽수를 정밀 스캔하고 있습니다.";
+  // Gather text from TOC pages or first 6 pages
+  const targetPageNums = structure.tocPages.length > 0
+    ? structure.tocPages
+    : [1, 2, 3, 4].filter(p => p <= pdfDoc.numPages);
 
-  // 1. Fast Full Text Extraction
-  const pageTexts = await extractAllPagesText(pdfDoc);
-  if (currentDocumentType === 'receipt') {
-    const parsed = parseReceiptToc(pageTexts);
-    currentItems = parsed.items;
-    tocPages = parsed.tocPages;
-    if (loadingOverlay) loadingOverlay.style.display = 'none';
-    return;
+  let contextText = "";
+  for (const p of targetPageNums) {
+    contextText += `\n--- [PDF Page ${p}] ---\n` + (pageTexts[p - 1]?.text || "");
   }
-  
-  // 2. Analyze Document Structure (Cover & TOC detection)
-  const structure = analyzeDocumentStructure(pageTexts);
-  tocPages = structure.tocPages;
 
-  // Use validated rows directly for this explicit layout, with or without an AI key.
-  let rawParsedItems = parseGroupedAuditToc(pageTexts, structure);
-  if (!rawParsedItems.length) rawParsedItems = parseAuditToc(pageTexts, structure);
-  if (!rawParsedItems.length) rawParsedItems = parseOfficerToc(pageTexts, structure);
-  if (!rawParsedItems.length) rawParsedItems = parseDottedToc(pageTexts, structure);
-
-  // 3. AI Parsing with Multi-Model Fallback (3.5-flash-lite -> 3.5-flash -> flash-latest)
-  if (geminiApiKey && rawParsedItems.length === 0) {
-    const candidateModels = [
-      "gemini-3.5-flash-lite",
-      "gemini-3.5-flash",
-      "gemini-flash-latest"
-    ];
-
-    // Gather text from TOC pages or first 6 pages
-    const targetPageNums = structure.tocPages.length > 0 
-      ? structure.tocPages 
-      : [1, 2, 3, 4].filter(p => p <= pdfDoc.numPages);
-
-    let contextText = "";
-    for (const p of targetPageNums) {
-      contextText += `\n--- [PDF Page ${p}] ---\n` + (pageTexts[p - 1]?.text || "");
-    }
-
-    const prompt = `당신은 공공기관/교육청 결산 및 행정감사 질의서 분석 전문가입니다.
+  const prompt = `당신은 공공기관/교육청 결산 및 행정감사 질의서 분석 전문가입니다.
 제공된 텍스트는 PDF 문서의 앞부분(목차 및 관련 페이지) 텍스트입니다.
 
 [중요 파싱 규칙]:
@@ -1157,47 +1188,78 @@ async function parseUploadedPdf(pdfDoc, fileName) {
 ${contextText}
 `;
 
-    for (const modelName of candidateModels) {
-      try {
-        if (loadingTitle) loadingTitle.innerText = `Gemini AI(${modelName})가 목차 분석 중...`;
-        if (loadingDesc) loadingDesc.innerText = "질의 문항, 팀별 카테고리, 담당 의원을 정밀 구조화하고 있습니다.";
+  for (const modelName of candidateModels) {
+    try {
+      if (loadingTitle) loadingTitle.innerText = `Gemini AI(${modelName})가 목차 분석 중...`;
+      if (loadingDesc) loadingDesc.innerText = "질의 문항, 팀별 카테고리, 담당 의원을 정밀 구조화하고 있습니다.";
 
-        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${geminiApiKey}`;
-        const response = await fetch(apiUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: {
-              temperature: 0.1,
-              responseMimeType: "application/json"
-            }
-          })
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          let rawReply = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-          rawReply = rawReply.replace(/```json/gi, '').replace(/```/g, '').trim();
-          const parsed = JSON.parse(rawReply);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            rawParsedItems = parsed;
-            console.log(`Gemini AI (${modelName}) successfully parsed ${parsed.length} questions.`);
-            break; // Success! Exit model loop
+      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${geminiApiKey}`;
+      const response = await fetch(apiUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.1,
+            responseMimeType: "application/json"
           }
-        } else {
-          console.warn(`Model ${modelName} returned status ${response.status}, trying next model...`);
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        let rawReply = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        rawReply = rawReply.replace(/```json/gi, '').replace(/```/g, '').trim();
+        const parsed = JSON.parse(rawReply);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          console.log(`Gemini AI (${modelName}) successfully parsed ${parsed.length} questions.`);
+          return parsed;
         }
-      } catch (err) {
-        console.warn(`Model ${modelName} failed:`, err);
+      } else {
+        console.warn(`Model ${modelName} returned status ${response.status}, trying next model...`);
       }
+    } catch (err) {
+      console.warn(`Model ${modelName} failed:`, err);
     }
+  }
+  return [];
+}
+
+async function parseUploadedPdf(pdfDoc, fileName) {
+  const loadingOverlay = document.getElementById('ai-loading-overlay');
+  const loadingTitle = document.getElementById('ai-loading-title');
+  const loadingDesc = document.getElementById('ai-loading-desc');
+
+  if (loadingOverlay) loadingOverlay.style.display = 'flex';
+  if (loadingTitle) loadingTitle.innerText = "PDF 전체 텍스트 및 구조 분석 중...";
+  if (loadingDesc) loadingDesc.innerText = "문서의 표지, 목차, 질문 목록 및 본문 쪽수를 정밀 스캔하고 있습니다.";
+
+  // 1. Fast Full Text Extraction
+  const pageTexts = await extractAllPagesText(pdfDoc);
+  if (currentDocumentType === 'receipt') {
+    const parsed = parseReceiptToc(pageTexts);
+    currentItems = parsed.items;
+    tocPages = parsed.tocPages;
+    if (loadingOverlay) loadingOverlay.style.display = 'none';
+    return;
+  }
+
+  // 2. Analyze Document Structure (Cover & TOC detection)
+  const structure = analyzeDocumentStructure(pageTexts);
+  tocPages = structure.tocPages;
+
+  // Use validated rows directly for this explicit layout, with or without an AI key.
+  let rawParsedItems = parseExplicitQuestionLayout(pageTexts, structure);
+
+  // 3. AI Parsing with Multi-Model Fallback (3.5-flash-lite -> 3.5-flash -> flash-latest)
+  if (geminiApiKey && rawParsedItems.length === 0) {
+    rawParsedItems = await parseQuestionsWithGemini(pdfDoc, pageTexts, structure, loadingTitle, loadingDesc);
   }
 
   // 4. Fallback to Heuristic Client-Side Parser if AI was not used or failed
   if (!rawParsedItems || rawParsedItems.length === 0) {
     if (loadingTitle) loadingTitle.innerText = "자체 스마트 파서로 문항 추출 중...";
-    rawParsedItems = parseQuestionsHeuristic(pageTexts, structure);
+    rawParsedItems = parseRemainingQuestionLayouts(pageTexts, structure);
     console.log(`Heuristic parser found ${rawParsedItems.length} questions.`);
   }
 
@@ -1231,6 +1293,7 @@ ${contextText}
       const validId = (!isNaN(parsedId) && parsedId > 0) ? parsedId : (idx + 1);
 
       return {
+        [tocRowTitle]: item[tocRowTitle],
         id: validId,
         categoryNumber: Number(item.categoryNumber) || null,
         team: (item.team || item.department || "").trim(),
