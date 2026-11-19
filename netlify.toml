@@ -1,4 +1,5 @@
 [build]
+  ignore = "node ./scripts/netlify-ignore.cjs"
   command = "node scripts/build-netlify.cjs"
   publish = "netlify-deploy"
 
