@@ -1,0 +1,134 @@
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { documentInfo, validFileId, DOCUMENT_RETENTION_MS } from '../lib/meeting-documents.mjs';
+
+// Includes token/snapshot reads and admin writes. Allow five clients behind one
+// office IP ample headroom; enforce at the edge without per-request Blob writes.
+export const config = {
+  path: '/.netlify/functions/meeting',
+  rateLimit: { windowLimit: 300, windowSize: 60, aggregateBy: ['ip', 'domain'] }
+};
+
+const json = (data, status = 200) => new Response(JSON.stringify(data), {
+  status,
+  headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }
+});
+const digest = value => createHash('sha256').update(value).digest();
+const roomPattern = /^[a-zA-Z0-9가-힣ㄱ-ㅎㅏ-ㅣ _-]{1,64}$/;
+const maxAge = 12 * 60 * 60 * 1000;
+
+// Dependencies are injectable so authorization and persistence can be checked locally.
+export function createHandler({ store, documents, adminKey, broker, now = Date.now, revision = randomUUID, retentionMs = maxAge }) {
+  return async request => {
+    const currentAdminKey = typeof adminKey === 'function' ? adminKey() : adminKey;
+    if (!['GET', 'POST'].includes(request.method)) return json({ error: '허용되지 않은 요청입니다.' }, 405);
+    if (!currentAdminKey || currentAdminKey.length < 6) return json({ error: '서버에 MEETING_ADMIN_KEY(6자 이상)를 설정하고 다시 배포해주세요.' }, 503);
+    if (!broker) return json({ error: '서버에 ABLY_API_KEY를 설정하고 다시 배포해주세요.' }, 503);
+    const url = new URL(request.url);
+    const room = url.searchParams.get('room') || '';
+    if (!roomPattern.test(room)) return json({ error: '회의 이름은 한글·영문·숫자·공백·밑줄·하이픈 1~64자로 입력해주세요.' }, 400);
+    try {
+      if (request.method === 'GET') {
+        if (url.searchParams.get('action') === 'token') return json(await broker.issueToken(room));
+        const [state, messages] = await Promise.all([
+          store.get(room, { type: 'json', consistency: 'strong' }),
+          store.get(`messages:${room}`, { type: 'json', consistency: 'strong' })
+        ]);
+        return json({ state: state && now() - state.updatedAt < retentionMs ? state : null,
+          messages: (messages || []).filter(message => now() - message.sentAt < maxAge) });
+      }
+      const token = request.headers.get('authorization') || '';
+      if (!timingSafeEqual(digest(token), digest(`Bearer ${currentAdminKey}`))) return json({ error: '관리자 인증키를 확인해주세요.' }, 401);
+      // No cross-origin writes, including browser requests made with stolen room links.
+      const origin = request.headers.get('origin');
+      if (origin && origin !== url.origin) return json({ error: '다른 사이트에서 제어할 수 없습니다.' }, 403);
+      const bodyText = await request.text();
+      if (bodyText.length > 8192) return json({ error: '요청이 너무 큽니다.' }, 413);
+      let body;
+      try { body = JSON.parse(bodyText); } catch { return json({ error: '올바른 JSON 요청이 아닙니다.' }, bodyText.length > 2048 ? 413 : 400); }
+      if (body?.action !== 'send-message' && bodyText.length > 2048) return json({ error: '요청이 너무 큽니다.' }, 413);
+      if (body?.action === 'authenticate') return json({ authenticated: true });
+      if (body?.action === 'send-message') {
+        if (typeof body.text !== 'string' || body.text.length > 1000 || (!body.text.trim() && !body.attachmentId)) {
+          return json({ error: '1~1,000자 메시지 또는 이미지·PDF를 첨부해주세요.' }, 400);
+        }
+        let attachment;
+        if (body.attachmentId !== undefined) {
+          if (!documents || !validFileId(body.attachmentId)) return json({ error: '첨부 파일이 올바르지 않습니다.' }, 400);
+          const entry = await documents.getMetadata(body.attachmentId, { consistency: 'strong' });
+          if (!entry || entry.metadata.room !== room || entry.metadata.purpose !== 'message' ||
+              now() - entry.metadata.createdAt >= 12 * 60 * 60 * 1000) return json({ error: '첨부 파일을 다시 선택해주세요.' }, 400);
+          attachment = documentInfo(room, body.attachmentId, entry.metadata);
+        }
+        const messageKey = `messages:${room}`;
+        const snapshot = store.getWithMetadata
+          ? await store.getWithMetadata(messageKey, { type: 'json', consistency: 'strong' }) : null;
+        const previous = store.getWithMetadata ? snapshot?.data : await store.get(messageKey, { type: 'json', consistency: 'strong' });
+        const message = { id: revision(), text: body.text.trim(), sentAt: now() };
+        if (attachment) message.attachment = attachment;
+        const messages = [...(previous || []).filter(item => now() - item.sentAt < maxAge), message].slice(-50);
+        const written = await store.setJSON(messageKey, messages, store.getWithMetadata
+          ? (snapshot ? { onlyIfMatch: snapshot.etag } : { onlyIfNew: true }) : undefined);
+        if (written?.modified === false) return json({ error: '다른 관리자가 메시지를 전송했습니다. 다시 전송해주세요.' }, 409);
+        await broker.publish(room, { type: 'message', revision: message.id, message });
+        return json({ message });
+      }
+      if (body?.controllerId !== undefined && !/^[a-zA-Z0-9_-]{1,80}$/.test(body.controllerId)) {
+        return json({ error: '관리자 세션 정보가 올바르지 않습니다.' }, 400);
+      }
+      if (!body || !/^[a-f0-9]{64}$/.test(body.documentId || '') ||
+          !['question', 'toc'].includes(body.mode) ||
+          (body.mode === 'question' && (!Number.isSafeInteger(body.questionId) || body.questionId < 1))) {
+        return json({ error: '문서 또는 문항 정보가 올바르지 않습니다.' }, 400);
+      }
+      const snapshot = store.getWithMetadata
+        ? await store.getWithMetadata(room, { type: 'json', consistency: 'strong' }) : null;
+      const previous = store.getWithMetadata ? snapshot?.data : await store.get(room, { type: 'json', consistency: 'strong' });
+      if (previous?.controllerId && previous.controllerId !== body.controllerId && now() - previous.updatedAt < 2000) {
+        return json({ error: '다른 관리자가 화면을 변경했습니다. 변경 후 2초가 지나면 다시 선택해주세요.', state: previous }, 409);
+      }
+      let document = previous?.document;
+      if (body.action === 'create-document' && previous) return json({ error: '이미 개설된 회의 이름입니다. 다른 이름으로 개설하거나 관리자로 참여해주세요.' }, 409);
+      if (['set-document', 'create-document'].includes(body.action)) {
+        if (!documents || !validFileId(body.fileId)) return json({ error: '먼저 회의 자료를 업로드해주세요.' }, 400);
+        const entry = await documents.getMetadata(body.fileId, { consistency: 'strong' });
+        if (!entry || entry.metadata.room !== room || entry.metadata.id !== body.documentId || entry.metadata.purpose === 'message') return json({ error: '업로드한 회의 자료가 일치하지 않습니다.' }, 400);
+        if (previous?.document?.fileId !== body.fileId && now() - entry.metadata.createdAt >= DOCUMENT_RETENTION_MS) {
+          return json({ error: '오래된 업로드입니다. PDF를 다시 업로드해주세요.' }, 410);
+        }
+        document = documentInfo(room, body.fileId, entry.metadata);
+      } else if (document && document.id !== body.documentId) {
+        return json({ error: '회의 자료로 업로드한 PDF에서 문항을 선택해주세요.' }, 409);
+      }
+      const state = { revision: revision(), sequence: (previous?.sequence || 0) + 1, updatedAt: now(), documentId: body.documentId,
+        mode: body.mode, questionId: body.mode === 'question' ? body.questionId : null };
+      if (document) state.document = document;
+      if (body.controllerId) state.controllerId = body.controllerId;
+      const written = await store.setJSON(room, state, store.getWithMetadata
+        ? (snapshot ? { onlyIfMatch: snapshot.etag } : { onlyIfNew: true }) : undefined);
+      if (written?.modified === false) {
+        return json({ error: '다른 관리자가 먼저 화면을 변경했습니다. 최신 화면을 확인하고 다시 선택해주세요.',
+          state: await store.get(room, { type: 'json', consistency: 'strong' }) }, 409);
+      }
+      await broker.publish(room, state);
+      return json({ state });
+    } catch (error) {
+      console.error('Meeting state unavailable:', error.name);
+      return json({ error: '회의 서버에 연결하지 못했습니다. 잠시 후 다시 시도해주세요.' }, 503);
+    }
+  };
+}
+
+export default async request => {
+  try {
+    const { getStore } = await import('@netlify/blobs');
+    const { createBroker } = await import('../lib/meeting-ably.mjs');
+    // Use a deployment ID outside production so previews never control a live meeting.
+    const namespace = process.env.CONTEXT === 'production' ? 'production' : (process.env.DEPLOY_ID || 'local');
+    const store = getStore({ name: `dashboard-meetings-${namespace}`, consistency: 'strong' });
+    const broker = process.env.ABLY_API_KEY ? createBroker({ apiKey: process.env.ABLY_API_KEY, namespace }) : null;
+    const documents = getStore({ name: `dashboard-documents-${namespace}`, consistency: 'strong' });
+    return await createHandler({ store, documents, adminKey: process.env.MEETING_ADMIN_KEY, broker })(request);
+  } catch {
+    return json({ error: 'Netlify 회의 저장소를 사용할 수 없습니다. 서버 설정을 확인해주세요.' }, 503);
+  }
+};

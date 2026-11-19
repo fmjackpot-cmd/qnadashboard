@@ -593,6 +593,7 @@ main.viewer-container {
 .main-container[data-starting="true"] { visibility: hidden; }
 .start-screen { position: fixed; overflow-y: auto; background: radial-gradient(ellipse at 50% 0%, #253959, #0f172a 65%); }
 .start-panel { width: min(680px, 100%); margin: auto; text-align: center; }
+body.lan .start-panel { width: min(960px, 100%); }
 .start-brand { display: inline-flex; align-items: center; gap: 8px; color: #93c5fd; font-size: 13px; font-weight: 600; letter-spacing: 0.03em; }
 .start-panel h1 { margin: 20px 0 12px; font-size: clamp(27px, 4vw, 38px); letter-spacing: -0.04em; }
 .start-description { color: #a8b7cd; font-size: 15px; line-height: 1.7; }
@@ -1357,6 +1358,17 @@ aside.sidebar.mode-title-list {
 .receipt-department-filter label { display: block; margin-bottom: 5px; color: #475569; font-size: 0.76rem; font-weight: 600; }
 .receipt-department-filter select { width: 100%; padding: 7px 5px; border: 1px solid #cbd5e1; border-radius: 5px; background: white; color: #0f172a; font: inherit; font-size: 0.8rem; }
 .receipt-department-filter small { display: block; margin-top: 5px; color: #64748b; font-size: 0.7rem; }
+
+.meeting-directory-tools { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+#meeting-directory { border-bottom: 1px solid #475569; margin-bottom: 16px; padding-bottom: 16px; }
+#meeting-directory-login { display: grid; gap: 8px; }
+#meeting-list { display: grid; gap: 8px; max-height: 280px; overflow-y: auto; }
+.meeting-list-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px; border: 1px solid #64748b; border-radius: 8px; }
+.meeting-list-row span { flex: 1 1 180px; overflow-wrap: anywhere; }
+.meeting-force-close { color: #fca5a5; }
+
+.start-owner { margin-top: 20px; border: 0; background: transparent; color: #94a3b8; text-decoration: underline; cursor: pointer; padding: 10px; }
+#owner-list { display: grid; gap: 8px; margin-top: 12px; }
 
 .meeting-info { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 10px 14px; margin: 20px 0; font-size: 14px; }
 .meeting-info dt { color: #64748b; }

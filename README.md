@@ -100,3 +100,14 @@ PDF 자료를 업로드해 관리자와 참여자가 함께 열람하는 브라�
 - `meeting` API의 토큰 발급·상태 조회·관리자 전송은 도메인과 IP 조합별 분당 300회로 제한합니다. 같은 사무실 IP의 5명도 이 한도를 공유합니다. 초과 시 429 안내를 표시하며 별도 반복 재시도는 하지 않습니다. [Netlify 기본 제한](https://docs.netlify.com/manage/security/secure-access-to-sites/rate-limiting/)을 사용하므로 분산 카운터용 저장소 호출이 없고, 실제 차단까지 최대 10초 지연될 수 있습니다. 로컬 서버에는 이 플랫폼 제한이 적용되지 않습니다.
 
 동시 약 5명·5MB PDF·월 1~2회 규모에서는 상시 정리 작업, 별도 데이터베이스, 토큰 응답 캐시는 추가하지 않습니다. 배포 후 Netlify Deploy 로그에서 rate limit 규칙 적용 성공과 실제 접속·다운로드를 확인하세요.
+
+## 웹 및 Windows 빌드
+
+PDF 파서와 뷰어는 공통 app.js에 있습니다. 웹 회의 구현은 루트의 live-session.js와 netlify/를 사용합니다. LAN 회의 구현과 Windows 실행기는 lan/에 있습니다.
+
+- 웹 배포 폴더: `node scripts/build-netlify.cjs`
+- LAN 개발용 정적 파일: `node scripts/build-netlify.cjs lan`
+- Windows 설치 ZIP: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-server-package.ps1`
+- 전체 테스트: `node --test tests/*.test.cjs` (Windows 설치본을 먼저 빌드하면 실행 파일 테스트도 실행됩니다.)
+
+Windows 설치본의 운영 자료를 옮길 때는 기존 서버를 종료하고 설치 안내에 따라 .env와 server-data를 보존하세요.

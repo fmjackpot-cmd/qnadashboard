@@ -1,0 +1,834 @@
+(function (root) {
+  'use strict';
+
+  async function uploadPdfParts({ room, file, key, endpoint, documentType = 'questions', purpose, fetcher = root.fetch.bind(root), crypto = root.crypto, onProgress = () => {} }) {
+    const url = new URL(endpoint);
+    url.searchParams.set('room', room);
+    const send = async (target, body, headers = {}) => {
+      const response = await fetcher(target, { method: 'POST', body, signal: AbortSignal.timeout(60000),
+        headers: { Authorization: `Bearer ${key}`, ...(purpose ? { 'X-Document-Purpose': purpose } : {}), ...headers } });
+      let result;
+      try { result = await response.json(); } catch { throw new Error('업로드 응답을 확인하지 못했습니다. 다시 시도해주세요.'); }
+      if (!response.ok && purpose === 'message' && file.type.startsWith('image/') && result.error === '올바른 PDF 파일을 선택해주세요.') {
+        const local = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(target).hostname);
+        throw new Error(local
+          ? '실행 중인 로컬 서버가 이미지 첨부 이전 버전입니다. 서버 창에서 Ctrl+C로 종료한 뒤 run-app.bat을 다시 실행해주세요. 재시작하면 회의 PDF를 다시 업로드해야 합니다.'
+          : '사이트 화면과 서버 함수의 버전이 다릅니다. 이미지 첨부를 지원하는 최신 Functions를 화면과 함께 배포해주세요.');
+      }
+      if (!response.ok) throw new Error(result.error || 'PDF 업로드에 실패했습니다.');
+      return result;
+    };
+    if (file.size <= 4500000) return send(url, file, { 'Content-Type': file.type || 'application/pdf', 'X-Pdf-Name': encodeURIComponent(file.name), 'X-Document-Type': documentType });
+    if (file.size > 50000000) throw new Error('PDF는 최대 50MB까지 업로드할 수 있습니다.');
+    const bytes = await file.arrayBuffer();
+    const hash = await (root.DashboardHash ? root.DashboardHash.digest(bytes, crypto) : crypto.subtle.digest('SHA-256', bytes));
+    const id = Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, '0')).join('');
+    url.searchParams.set('action', 'init');
+    const init = await send(url, JSON.stringify({ name: file.name, size: file.size, id, documentType, purpose }), { 'Content-Type': 'application/json' });
+    url.searchParams.set('upload', init.uploadId);
+    for (let part = 0; part < init.parts; part++) {
+      url.searchParams.set('action', 'part');
+      url.searchParams.set('part', part);
+      onProgress(`PDF 업로드 중 · ${part + 1}/${init.parts}`);
+      await send(url, file.slice(part * init.partBytes, (part + 1) * init.partBytes), { 'Content-Type': 'application/octet-stream' });
+    }
+    url.searchParams.set('action', 'complete');
+    url.searchParams.delete('part');
+    onProgress('PDF 원본 검증 중...');
+    return send(url, '');
+  }
+
+  class MeetingSession {
+    constructor({ request, subscribe, uploadFile, showDocument, getTarget, getDocument, showTarget, onStatus = () => {}, onMessage = () => {}, messageStorage, now = Date.now }) {
+      Object.assign(this, { request, subscribe, uploadFile, showDocument, getTarget, getDocument, showTarget, onStatus, onMessage, messageStorage, now });
+      this.messages = [];
+      this.seenMessages = new Set();
+      this.dismissedMessages = new Set();
+      this.lockedUntil = 0;
+      this.generation = 0;
+      this.active = false;
+      this.lastRevision = null;
+      this.sendQueue = Promise.resolve();
+      this.navigationRevision = 0;
+      this.applyQueue = Promise.resolve();
+    }
+
+    async join(room, key = '') {
+      this.leave();
+      this.controllerId = root.crypto?.randomUUID?.() || `admin-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const generation = this.generation;
+      if (!/^[a-zA-Z0-9가-힣ㄱ-ㅎㅏ-ㅣ _-]{1,64}$/.test(room)) throw new Error('회의 이름은 한글·영문·숫자·공백·밑줄·하이픈 1~64자로 입력해주세요.');
+      if (key) await this.request(room, { action: 'authenticate' }, key);
+      if (generation !== this.generation) return;
+      Object.assign(this, { active: true, room, key, role: key ? 'admin' : 'viewer', lastRevision: null,
+        lastState: null, pendingState: null, sharedDocument: null, latestSequence: 0, browsing: false, connectionLost: false, initialMessageSync: true });
+      try {
+        const dismissed = JSON.parse(this.messageStorage?.getItem(`dashboard-messages:${room}`) || '[]');
+        this.dismissedMessages = new Set(Array.isArray(dismissed) ? dismissed.filter(id => typeof id === 'string') : []);
+      } catch { this.dismissedMessages = new Set(); }
+      this.onStatus(key ? 'admin' : 'waiting');
+      try {
+        const stop = await this.subscribe(room, {
+          onState: state => { if (generation === this.generation) this.receive(state); },
+          onReconnect: () => { if (generation === this.generation) return this.sync(); },
+          onConnection: (connected, state) => {
+            if (generation !== this.generation) return;
+            this.connectionLost = !connected;
+            if (!connected && root.DASHBOARD_CONFIG?.meetingDirectory) this.sync();
+            if (!connected) this.onStatus('error', state === 'failed'
+              ? '실시간 연결에 실패했습니다. 회의 연결에서 다시 접속해주세요.'
+              : '실시간 연결이 끊겼습니다. 자동으로 다시 연결하는 중입니다.');
+          }
+        });
+        if (generation !== this.generation) { stop(); return; }
+        this.stopSubscription = stop;
+        // Subscribe first, then fetch once: a move during this read is protected
+        // by its increasing sequence, so an older snapshot cannot rewind viewers.
+        await this.sync();
+      } catch (error) {
+        if (generation === this.generation) { this.leave(); throw error; }
+      }
+    }
+
+    leave() {
+      this.generation++;
+      if (this.stopSubscription) this.stopSubscription();
+      this.stopSubscription = null;
+      this.active = false;
+      clearTimeout(this.unlockTimer);
+      this.lockedUntil = 0;
+      this.key = '';
+      this.messages = [];
+      this.seenMessages.clear();
+      this.dismissedMessages.clear();
+      this.onMessage(null);
+      this.onStatus('offline');
+    }
+
+    async loadSharedDocument() {
+      if (!this.active || this.role !== 'admin') throw new Error('관리자로 회의에 연결해주세요.');
+      const generation = this.generation;
+      const state = this.lastState || (await this.request(this.room)).state;
+      if (generation !== this.generation) return;
+      if (!state?.document) throw new Error('회의 자료가 없습니다. 첫 관리자는 PDF를 선택해 업로드해주세요.');
+      if (this.lastRevision !== state.revision) await this.receive(state);
+      if (generation !== this.generation) return;
+      if (!this.lastState) throw new Error('회의 자료를 표시하지 못했습니다. 연결 상태와 PDF를 확인하고 다시 연결해주세요.');
+      this.sharedDocument = state.document;
+      this.onStatus(this.canNavigate(false) ? 'admin' : 'cooldown');
+    }
+
+    async sync() {
+      if (!this.active) return;
+      const generation = this.generation;
+      try {
+        const { state, messages, closed } = await this.request(this.room);
+        if (closed && generation === this.generation) { await this.receive({ type: 'closed' }); return; }
+        if (generation !== this.generation) return;
+        if (Array.isArray(messages)) for (const message of messages) {
+          // A fresh entry establishes a baseline; reconnects still catch up on missed messages.
+          if (this.initialMessageSync) { if (typeof message?.id === 'string') this.seenMessages.add(message.id); }
+          else this.receiveMessage(message);
+        }
+        this.initialMessageSync = false;
+        if (state) await this.receive(state);
+        else if (!this.lastState) this.onStatus(this.role === 'admin' ? 'admin' : 'waiting');
+        this.connectionLost = false;
+      } catch (error) {
+        if (generation === this.generation) {
+          this.connectionLost = true;
+          this.onStatus('error', error.message);
+        }
+      }
+    }
+
+    receive(state) {
+      if (state?.type === 'closed') { this.leave(); this.onStatus('closed', '최상위 관리자가 회의를 종료했습니다. 다른 회의를 선택해주세요.'); return Promise.resolve(); }
+      if (state?.type === 'message') { this.receiveMessage(state.message); return Promise.resolve(); }
+      if (!this.active || !state ||
+          !Number.isSafeInteger(state.sequence) || state.sequence < 1 ||
+          typeof state.revision !== 'string' || !/^[a-f0-9]{64}$/.test(state.documentId || '') ||
+          !['question', 'toc'].includes(state.mode) ||
+          (state.mode === 'question' && (!Number.isSafeInteger(state.questionId) || state.questionId < 1))) return Promise.resolve();
+      if (state.sequence <= this.latestSequence) {
+        if (state.sequence === this.latestSequence && this.pendingState?.revision === state.revision && this.lastRevision !== state.revision) return this.applyPending();
+        if (this.connectionLost && this.lastRevision === state.revision) this.onStatus(this.role === 'admin'
+          ? (this.canNavigate(false) ? 'admin' : 'cooldown') : (this.browsing ? 'browsing' : 'following'));
+        return Promise.resolve();
+      }
+      this.latestSequence = state.sequence;
+      if (this.role === 'admin' && state.controllerId === this.controllerId) {
+        this.lastRevision = state.revision;
+        this.lastState = state;
+        this.pendingState = null;
+        return Promise.resolve();
+      }
+      if (this.role === 'admin' && state.controllerId) {
+        this.lockedUntil = this.now() + 2000;
+        clearTimeout(this.unlockTimer);
+        const generation = this.generation;
+        this.unlockTimer = setTimeout(() => {
+          if (this.active && generation === this.generation) this.onStatus('admin');
+        }, 2000);
+        this.unlockTimer?.unref?.();
+        this.onStatus('cooldown');
+      }
+      this.pendingState = state;
+      return this.applyPending();
+    }
+
+    receiveMessage(message) {
+      if (!this.active || this.role !== 'viewer' || !message || typeof message.id !== 'string' ||
+          !message.id || typeof message.text !== 'string' || (!message.text.trim() && !message.attachment) || message.text.length > 1000 ||
+          !Number.isFinite(message.sentAt) || this.seenMessages.has(message.id)) return;
+      this.seenMessages.add(message.id);
+      if (this.dismissedMessages.has(message.id)) return;
+      this.messages.push(message);
+      if (this.messages.length === 1) this.onMessage(message);
+    }
+
+    dismissMessage() {
+      const message = this.messages.shift();
+      if (!message) return;
+      this.dismissedMessages.add(message.id);
+      try {
+        this.messageStorage?.setItem(`dashboard-messages:${this.room}`, JSON.stringify([...this.dismissedMessages].slice(-1000)));
+      } catch { /* Closing still works if browser storage is unavailable. */ }
+      this.onMessage(this.messages[0] || null);
+    }
+
+    async sendMessage(text, attachment) {
+      if (!this.active || this.role !== 'admin') throw new Error('관리자로 회의에 연결해주세요.');
+      if (typeof text !== 'string' || (!text.trim() && !attachment) || text.length > 1000) throw new Error('메시지를 입력하거나 이미지·PDF를 첨부해주세요.');
+      const generation = this.generation;
+      const { message } = await this.request(this.room, { action: 'send-message', text,
+        ...(attachment ? { attachmentId: attachment.fileId } : {}) }, this.key);
+      return generation === this.generation ? message : null;
+    }
+
+    applyPending(force = false) {
+      const generation = this.generation;
+      this.applyQueue = this.applyQueue.catch(() => {}).then(async () => {
+        if (!this.active || generation !== this.generation || !this.pendingState) return;
+        const state = this.pendingState;
+        if (!force && state.revision === this.lastRevision) return;
+        if (!this.getDocument().ready && !state.document) { this.onStatus('loading'); return; }
+        try {
+          this.onStatus('switching');
+          await this.showTarget(state);
+          if (generation !== this.generation) return;
+          this.lastRevision = state.revision;
+          this.lastState = state;
+          if (state.document) this.sharedDocument = state.document;
+          this.browsing = false;
+          this.connectionLost = false;
+          this.onStatus(this.role === 'admin' ? (this.canNavigate(false) ? 'admin' : 'cooldown') : 'following');
+        } catch (error) {
+          if (generation === this.generation) this.onStatus('error', error.message);
+        }
+      });
+      return this.applyQueue;
+    }
+
+    canNavigate(notify = true) {
+      const allowed = !this.active || this.role !== 'admin' || this.now() >= this.lockedUntil;
+      if (!allowed && notify) this.onStatus('cooldown');
+      return allowed;
+    }
+
+    navigate(target) {
+      if (!this.active) return Promise.resolve();
+      if (this.role !== 'admin') {
+        this.browsing = true;
+        this.onStatus('browsing');
+        return Promise.resolve();
+      }
+      if (this.documentBusy) return Promise.resolve();
+      if (!this.canNavigate()) return Promise.resolve();
+      const generation = this.generation;
+      const doc = this.getDocument();
+      if (!doc.ready || !doc.hosted || !doc.id) {
+        this.onStatus('error', '먼저 PDF를 회의 자료로 업로드해주세요.');
+        return Promise.resolve();
+      }
+      // Start all debounce waits immediately; queued obsolete selections are skipped.
+      // Keep writes serialized so an in-flight move cannot overwrite the final one.
+      const selection = ++this.navigationRevision;
+      const settled = new Promise(resolve => setTimeout(resolve, 150));
+      this.sendQueue = this.sendQueue.catch(() => {}).then(async () => {
+        await settled;
+        if (generation !== this.generation || selection !== this.navigationRevision) return;
+        if (!this.canNavigate()) return;
+        this.onStatus('sending');
+        try {
+          const newDocument = doc.shared && this.sharedDocument?.fileId !== doc.shared.fileId;
+          const { state } = await this.request(this.room, { ...target, documentId: doc.id, controllerId: this.controllerId,
+            ...(newDocument ? { action: 'set-document', fileId: doc.shared.fileId } : {}) }, this.key);
+          if (generation !== this.generation) return;
+          await this.receive(state);
+          if (doc.shared && state.sequence === this.latestSequence) this.sharedDocument = doc.shared;
+          this.connectionLost = false;
+          this.onStatus(this.canNavigate(false) ? 'admin' : 'cooldown');
+        } catch (error) {
+          if (generation === this.generation) {
+            if (error.state) { await this.receive(error.state); await this.returnToAdmin(); }
+            this.onStatus('error', `${error.message} ‘현재 화면 전송’으로 다시 시도해주세요.`);
+          }
+        }
+      });
+      return this.sendQueue;
+    }
+
+    async shareFile(file, { create = false } = {}) {
+      if (!this.active || this.role !== 'admin') throw new Error('관리자로 회의에 연결해주세요.');
+      if (this.documentBusy) throw new Error('자료를 처리하는 중입니다. 완료 후 다시 선택해주세요.');
+      if (!this.canNavigate()) throw new Error('다른 관리자의 변경 후 2초가 지나면 다시 선택해주세요.');
+      if (!file || !file.size || (!file.name?.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf')) throw new Error('회의에 사용할 PDF 파일을 선택해주세요.');
+      if (file.size > 50000000) throw new Error('PDF는 최대 50MB까지 업로드할 수 있습니다.');
+      const generation = this.generation;
+      const room = this.room, key = this.key;
+      this.documentBusy = true;
+      this.onStatus('uploading');
+      try {
+        await this.sendQueue;
+        if (generation !== this.generation) return;
+        const { document } = await this.uploadFile(room, file, key);
+        if (generation !== this.generation) return;
+        await this.showDocument(document);
+        if (generation !== this.generation) return;
+        const { state } = await this.request(room, { ...this.getTarget(), controllerId: this.controllerId, action: create ? 'create-document' : 'set-document', fileId: document.fileId, documentId: document.id }, key);
+        if (generation !== this.generation) return;
+        await this.receive(state);
+        this.sharedDocument = document;
+        this.onStatus('admin');
+        return state;
+      } catch (error) {
+        if (generation === this.generation && error.state) { await this.receive(error.state); await this.returnToAdmin(); }
+        if (generation === this.generation) this.onStatus('error', error.message);
+        throw error;
+      } finally { this.documentBusy = false; }
+    }
+
+    async returnToAdmin() {
+      await this.applyPending(true);
+    }
+  }
+
+  function createAblySubscriber({ loadSdk, getToken }) {
+    return async (room, { onState, onReconnect, onConnection }) => {
+      const { channel: channelName, tokenRequest } = await getToken(room);
+      const Ably = await loadSdk();
+      let firstToken = tokenRequest;
+      const realtime = new Ably.Realtime({
+        authCallback: (_, callback) => {
+          if (firstToken) { const token = firstToken; firstToken = null; callback(null, token); return; }
+          getToken(room).then(result => {
+            if (result.channel !== channelName) throw new Error('회의 배포가 변경되었습니다. 새로고침 후 연결해주세요.');
+            callback(null, result.tokenRequest);
+          }).catch(error => callback(error, null));
+        },
+        autoConnect: false
+      });
+      const channel = realtime.channels.get(channelName);
+      let stopped = false, connectedBefore = false, attachedBefore = false;
+      const stop = () => {
+        if (stopped) return;
+        stopped = true;
+        channel.unsubscribe();
+        channel.off();
+        realtime.connection.off();
+        realtime.close();
+      };
+      realtime.connection.on('connected', () => {
+        if (stopped) return;
+        onConnection(true);
+        if (connectedBefore) onReconnect();
+        connectedBefore = true;
+      });
+      for (const state of ['disconnected', 'suspended', 'failed']) {
+        realtime.connection.on(state, () => { if (!stopped) onConnection(false, state); });
+      }
+      channel.on('attached', change => {
+        if (!stopped && attachedBefore && !change.resumed) onReconnect();
+        attachedBefore = true;
+      });
+      channel.on('failed', () => { if (!stopped) onConnection(false, 'failed'); });
+      let connectTimeout;
+      try {
+        const subscribed = channel.subscribe('navigate', message => { if (!stopped) onState(message.data); });
+        const deadline = new Promise((_, reject) => {
+          connectTimeout = setTimeout(() => reject(new Error('실시간 연결 시간이 초과되었습니다. 네트워크를 확인하고 다시 연결해주세요.')), 20000);
+        });
+        realtime.connect();
+        await Promise.race([subscribed, deadline]);
+        return stop;
+      } catch (error) { stop(); throw error; }
+      finally { clearTimeout(connectTimeout); }
+    };
+  }
+
+  function createLanSubscriber({ endpoint, EventSourceClass = root.EventSource }) {
+    return async (room, { onState, onReconnect, onConnection }) => {
+      const url = new URL(endpoint, root.location?.href || 'http://localhost');
+      url.searchParams.set('room', room);
+      const source = new EventSourceClass(url);
+      let connectedBefore = false, settled = false;
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          if (!settled) { settled = true; source.close(); reject(new Error('서버 연결 시간이 초과되었습니다. 서버 주소와 네트워크를 확인해주세요.')); }
+        }, 15000);
+        source.onopen = () => {
+          onConnection(true, 'connected');
+          if (connectedBefore) onReconnect();
+          connectedBefore = true;
+          if (!settled) { settled = true; clearTimeout(timer); resolve(() => source.close()); }
+        };
+        source.onmessage = event => { try { onState(JSON.parse(event.data)); } catch { /* Ignore malformed events. */ } };
+        source.onerror = () => { onConnection(false, 'disconnected'); };
+      });
+    };
+  }
+
+  if (typeof module !== 'undefined' && module.exports) module.exports = { MeetingSession, createAblySubscriber, createLanSubscriber, uploadPdfParts };
+  root.MeetingSession = MeetingSession;
+  if (!root.document) return;
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const el = id => document.getElementById(id);
+    const dialog = el('meeting-dialog');
+    const status = el('meeting-status');
+    const form = el('meeting-form');
+    const messageDialog = el('meeting-message-dialog');
+    const composeDialog = el('meeting-compose-dialog');
+    const messageForm = el('meeting-message-form');
+    const messageText = el('meeting-message-text');
+    messageText.required = false;
+    const messageFeedback = el('meeting-message-feedback');
+    const mediaView = root.MessageMedia?.createAttachmentView({ container: el('meeting-message-media'), dialog: messageDialog,
+      endpoint: root.DASHBOARD_CONFIG?.meetingDocumentEndpoint || '/.netlify/functions/meeting-document' });
+    let resetAttachment = () => {};
+    const endpoint = root.DASHBOARD_CONFIG?.meetingEndpoint;
+    const labels = {
+      offline: '개별 열람 · 회의에 연결하면 관리자 이동이 우선 표시됩니다',
+      waiting: '회의 연결됨 · 관리자 전송 대기 중',
+      loading: '회의 연결됨 · 문서를 불러오는 중',
+      uploading: '회의 PDF 업로드·확인 중 · 완료되면 참여자에게 적용됩니다',
+      switching: '관리자 화면으로 이동 중…',
+      following: '관리자 화면 표시 중 · 자유롭게 열람할 수 있습니다',
+      browsing: '자유 열람 중 · 관리자 이동 시 자동 전환됩니다',
+      admin: '관리자 제어 중 · 문항을 선택하면 모든 이용자에게 전송됩니다',
+      cooldown: '다른 관리자가 화면을 변경했습니다 · 2초 후 문항을 변경할 수 있습니다',
+      sending: '전체 이용자에게 전송 중…'
+    };
+    const request = async (room, body, key, action) => {
+      if (!endpoint) throw new Error('실시간 회의는 서버 설정 후 Netlify에서 사용할 수 있습니다. 배포 안내를 확인해주세요.');
+      const url = new URL(endpoint, location.href);
+      url.searchParams.set('room', room);
+      if (action) url.searchParams.set('action', action);
+      const response = await fetch(url, {
+        method: body ? 'POST' : 'GET', cache: 'no-store',
+        headers: body ? { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` } : {},
+        body: body ? JSON.stringify(body) : undefined,
+        signal: AbortSignal.timeout(15000)
+      });
+      if (response.status === 429) throw new Error('회의 요청이 너무 잦습니다. 잠시 후 다시 연결하거나 전송해주세요.');
+      let result;
+      try { result = await response.json(); } catch { throw new Error('회의 서버가 없습니다. Functions를 포함해 Netlify에 배포해주세요.'); }
+      if (!response.ok) {
+        const error = new Error(result.error || '회의 서버 연결에 실패했습니다.');
+        error.state = result.state;
+        if (result.closed && !body) return { closed: true };
+        throw error;
+      }
+      return result;
+    };
+    let sdkLoading;
+    const loadSdk = () => {
+      if (root.Ably) return Promise.resolve(root.Ably);
+      if (!sdkLoading) sdkLoading = new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = root.DASHBOARD_CONFIG?.meetingSdk || './vendor/ably.min.js';
+        script.onload = () => root.Ably ? resolve(root.Ably) : reject(new Error('Ably SDK를 불러오지 못했습니다.'));
+        script.onerror = () => { script.remove(); sdkLoading = null; reject(new Error('실시간 연결 모듈을 불러오지 못했습니다. 새로고침 후 다시 연결해주세요.')); };
+        document.head.appendChild(script);
+      });
+      return sdkLoading;
+    };
+    let roleMode = 'viewer', entryMode = 'viewer';
+    let onClosed = () => {};
+    let pendingStartFile = null;
+    let messageStorage;
+    try { messageStorage = root.localStorage; } catch { /* Private browsing may restrict storage. */ }
+    const session = new MeetingSession({
+      request,
+      messageStorage,
+      onMessage: message => {
+        if (!message) { mediaView?.clear(); if (messageDialog.open) messageDialog.close(); return; }
+        el('meeting-message-body').textContent = message.text;
+        el('meeting-message-body').hidden = !message.text;
+        el('meeting-message-body').scrollTop = 0;
+        root.MessageMedia?.positionMessageDialog(messageDialog);
+        if (!messageDialog.open) messageDialog.showModal();
+        mediaView?.show(message.attachment);
+        el('meeting-message-close').focus?.();
+      },
+      getTarget: () => root.DashboardMeeting.getTarget(),
+      showDocument: descriptor => root.DashboardMeeting.showDocument(descriptor),
+      uploadFile: async (room, file, key) => {
+        const url = new URL(root.DASHBOARD_CONFIG?.meetingDocumentEndpoint || '/.netlify/functions/meeting-document', location.href);
+        return uploadPdfParts({ room, file, key, endpoint: url, documentType: el('meeting-type-receipt').checked ? 'receipt' : 'questions',
+          onProgress: message => session.onStatus('uploading', message) });
+      },
+      subscribe: root.DASHBOARD_CONFIG?.meetingTransport === 'sse'
+        ? createLanSubscriber({ endpoint: root.DASHBOARD_CONFIG.meetingEvents })
+        : createAblySubscriber({ loadSdk, getToken: room => request(room, null, null, 'token') }),
+      getDocument: () => root.DashboardMeeting.getDocument(),
+      showTarget: state => root.DashboardMeeting.showTarget(state),
+      onStatus: (kind, message) => {
+        if (messageDialog.open) root.MessageMedia?.positionMessageDialog(messageDialog);
+        status.textContent = message || labels[kind];
+        status.dataset.state = kind;
+        if (kind === 'closed') onClosed();
+        el('meeting-message-open').hidden = !session?.active || session.role !== 'admin';
+        messageForm.hidden = !session?.active || session.role !== 'admin';
+        if (kind === 'offline') {
+          resetAttachment();
+          messageText.value = ''; messageFeedback.textContent = '';
+          if (composeDialog.open) composeDialog.close();
+        }
+        const button = el('meeting-open');
+        button.dataset.state = kind;
+        button.title = `${session?.active ? `회의 ${session.room} · ` : ''}${status.textContent} · 클릭하여 회의 설정`;
+        button.ariaLabel = button.title;
+        el('meeting-leave').hidden = !session?.active;
+        updateMeetingDialog();
+        el('start-status').dataset.state = kind;
+        el('start-status').textContent = kind === 'offline'
+          ? '참여자는 별도의 PDF 파일이나 관리자 키가 필요하지 않습니다.' : status.textContent;
+      }
+    });
+    const shareLink = room => {
+      const url = new URL(location.href);
+      url.search = '';
+      url.hash = '';
+      url.searchParams.set('room', room);
+      return url.href;
+    };
+    const join = async (room, key, file, create = false) => {
+      if (root.DASHBOARD_CONFIG?.meetingDirectory && !key && (await request(room)).closed) throw new Error('종료된 회의입니다. 다른 회의를 선택해주세요.');
+      await session.join(room, key);
+      if (!session.active) return;
+      if (key) {
+        try {
+          if (file) await session.shareFile(file, { create });
+          else await session.loadSharedDocument();
+        }
+        catch (error) { session.leave(); throw error; }
+      }
+      el('meeting-link').value = shareLink(room);
+      const url = new URL(location.href);
+      url.searchParams.set('room', room);
+      history.replaceState(null, '', url);
+    };
+    const updateMeetingDialog = () => {
+      const connected = session.active;
+      el('meeting-heading').textContent = connected ? '회의 정보' : entryMode === 'create' ? '회의 개설하기' : roleMode === 'admin' ? '관리자로 참여하기' : '회의 참여하기';
+      el('meeting-intro').hidden = connected;
+      el('meeting-info').hidden = !connected;
+      form.hidden = connected || (Boolean(directoryEndpoint) && entryMode !== 'create');
+      el('meeting-directory').hidden = connected || !directoryEndpoint || entryMode === 'create';
+      el('meeting-role-switch').hidden = connected || entryMode === 'create';
+      el('meeting-sharing').hidden = !connected;
+      if (connected) {
+        el('meeting-info-room').textContent = session.room;
+        el('meeting-info-document').textContent = session.sharedDocument?.name || session.lastState?.document?.name || '자료 준비 중';
+        el('meeting-info-role').textContent = session.role === 'admin' ? '관리자' : '참여자';
+      }
+    };
+    const setRole = (role, intent = role === 'admin' ? 'admin' : 'viewer') => {
+      entryMode = intent;
+      roleMode = role === 'admin' ? 'admin' : 'viewer';
+      el('meeting-heading').textContent = entryMode === 'create' ? '회의 개설하기' : roleMode === 'admin' ? '관리자로 참여하기' : '회의 참여하기';
+      form.hidden = Boolean(directoryEndpoint) && entryMode !== 'create';
+      if (directoryEndpoint) el('meeting-directory').hidden = entryMode === 'create';
+      el('meeting-role-switch').hidden = entryMode === 'create';
+      el('meeting-directory-login').hidden = roleMode !== 'admin';
+      el('meeting-directory-key').disabled = roleMode !== 'admin';
+      el('meeting-directory-key').required = roleMode === 'admin';
+      el('meeting-pdf').required = Boolean(directoryEndpoint) && entryMode === 'create';
+      el('meeting-admin').textContent = entryMode === 'create' ? '회의 개설하기' : '관리자로 참여하기';
+      el('meeting-admin-fields').hidden = roleMode !== 'admin';
+      el('meeting-admin-fields').disabled = roleMode !== 'admin';
+      el('meeting-viewer').hidden = roleMode === 'admin';
+      el('meeting-key').required = roleMode === 'admin';
+      el('meeting-role-admin').ariaPressed = String(roleMode === 'admin' && entryMode !== 'create');
+      el('meeting-role-viewer').ariaPressed = String(roleMode === 'viewer');
+      updateMeetingDialog();
+    };
+    const openMeeting = (role, file = null, intent = role === 'admin' ? 'admin' : 'viewer') => {
+      setRole(role, intent);
+      if (session.active && !file) {
+        el('meeting-error').textContent = '';
+        if (!dialog.open) dialog.showModal();
+        return;
+      }
+      const type = root.DashboardMeeting.getDocument().documentType;
+      if (type) {
+        el('meeting-type-receipt').checked = type === 'receipt';
+        el('meeting-type-questions').checked = type !== 'receipt';
+      }
+      pendingStartFile = file;
+      el('meeting-pdf').value = '';
+      el('meeting-pdf-hint').textContent = file ? `선택한 자료: ${file.name} · 관리자 인증 후 업로드합니다.`
+        : '첫 관리자는 PDF를 선택하세요. 추가 관리자는 같은 회의 이름과 인증키를 입력하면 기존 자료로 접속합니다.';
+      el('meeting-error').textContent = '';
+      el('meeting-room').value = entryMode === 'create' ? '' : session.room || new URL(location.href).searchParams.get('room') || '';
+      if (!dialog.open) dialog.showModal();
+      if (directoryEndpoint) { el('meeting-key').value = directoryRole === 'admin' ? directoryKey : ''; if (entryMode !== 'create') refreshRooms(); }
+      if (entryMode === 'create') el('meeting-pdf-hint').textContent = file ? `선택한 자료: ${file.name}` : '새 회의에 사용할 PDF를 선택해주세요. 기존 회의는 관리자로 참여하기에서 선택하세요.';
+      el('meeting-room').focus?.();
+    };
+    const directoryEndpoint = root.DASHBOARD_CONFIG?.meetingDirectory;
+    let directoryKey = '', directoryRole = 'viewer', listRevision = 0;
+    const directoryRequest = async (body, key = entryMode === 'admin' ? directoryKey : '', target = directoryEndpoint) => {
+      const response = await fetch(target, { method: body ? 'POST' : 'GET', cache: 'no-store',
+        headers: { ...(key ? { Authorization: `Bearer ${key}` } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) },
+        body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(15000) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || '회의 목록을 불러오지 못했습니다.');
+      return result;
+    };
+    const refreshRooms = async () => {
+      if (!directoryEndpoint) return;
+      const revision = ++listRevision;
+      const feedback = el('meeting-directory-status');
+      feedback.textContent = '회의 목록을 불러오는 중…';
+      try {
+        const result = await directoryRequest();
+        if (revision !== listRevision) return;
+        if (result.role === 'super') throw new Error('관리자 인증키를 확인해주세요.');
+        directoryRole = result.role;
+        el('meeting-directory-logout').hidden = directoryRole === 'viewer';
+        const list = el('meeting-list');
+        list.replaceChildren();
+        feedback.textContent = (directoryRole === 'admin' ? '관리자 인증 완료 · 참여할 회의를 선택하세요.' : '열려 있는 회의를 선택하세요. 인증키는 필요하지 않습니다.') + (result.rooms.length ? '' : ' · 개설된 회의가 없습니다.');
+        for (const room of result.rooms) {
+          const row = document.createElement('div'); row.className = 'meeting-list-row';
+          const description = document.createElement('span');
+          description.textContent = `${room.room} · ${room.closedAt ? '종료' : '개설 중'}${room.documentName ? ' · ' + room.documentName : ''}`;
+          row.append(description);
+          if (!room.closedAt) {
+            const asAdmin = entryMode === 'admin';
+            const enter = document.createElement('button'); enter.type = 'button'; enter.textContent = asAdmin ? '관리자로 입장' : '참가';
+            enter.disabled = asAdmin && directoryRole !== 'admin';
+            enter.onclick = async () => {
+              enter.disabled = true;
+              try { await join(room.room, asAdmin ? directoryKey : ''); dialog.close(); }
+              catch (error) { feedback.textContent = error.message; }
+              finally { enter.disabled = false; }
+            };
+            row.append(enter);
+
+          }
+          list.append(row);
+        }
+      } catch (error) { if (revision === listRevision) feedback.textContent = error.message; }
+    };
+    if (directoryEndpoint) {
+      el('meeting-directory').hidden = session.active || entryMode === 'create';
+      el('meeting-list-refresh').onclick = refreshRooms;
+      el('meeting-directory-login').onsubmit = async event => {
+        event.preventDefault();
+        directoryKey = el('meeting-directory-key').value.trim();
+        el('meeting-directory-key').value = '';
+        directoryRole = 'viewer';
+        setRole('admin');
+        await refreshRooms();
+        if (directoryRole === 'admin') { setRole('admin'); el('meeting-key').value = directoryKey; }
+        else { directoryKey = ''; el('meeting-key').value = ''; }
+      };
+      el('meeting-directory-logout').onclick = () => {
+        directoryKey = ''; directoryRole = 'viewer'; el('meeting-key').value = '';
+        if (session.active && session.role === 'admin') session.leave();
+        setRole('viewer'); refreshRooms();
+      };
+      const ownerEndpoint = root.DASHBOARD_CONFIG?.meetingOwnerEndpoint;
+      el('start-owner').hidden = !ownerEndpoint;
+      el('meeting-owner').hidden = !ownerEndpoint;
+      el('start-owner').onclick = () => { if (ownerEndpoint) root.location.href = new URL('server-manager.html', location.href).href; };
+      el('meeting-owner').onclick = el('start-owner').onclick;
+      onClosed = () => {
+        const url = new URL(location.href); url.searchParams.delete('room'); history.replaceState(null, '', url);
+        el('meeting-link').value = '';
+        el('upload-overlay').style.display = 'flex';
+        const shell = el('dashboard-shell'); shell.dataset.starting = 'true'; shell.inert = true; shell.ariaHidden = 'true';
+        if (composeDialog.open) composeDialog.close();
+        openMeeting('viewer');
+      };
+      dialog.addEventListener('close', () => { listRevision++; });
+    }
+    el('meeting-open').onclick = () => openMeeting(session.active ? session.role : roleMode);
+    el('start-admin').onclick = () => openMeeting('admin', null, 'create');
+    el('start-viewer').onclick = () => openMeeting('viewer');
+    el('meeting-role-admin').onclick = () => openMeeting('admin');
+    el('meeting-role-viewer').onclick = () => openMeeting('viewer');
+    el('meeting-close').onclick = () => dialog.close();
+    dialog.addEventListener('close', () => { el('meeting-key').value = ''; });
+    form.onsubmit = async event => {
+      event.preventDefault();
+      const room = el('meeting-room').value.trim();
+      const admin = roleMode === 'admin';
+      const key = admin ? el('meeting-key').value.trim() : '';
+      if (admin && !key) { el('meeting-error').textContent = '관리자 인증키를 입력해주세요.'; return; }
+      const buttons = form.querySelectorAll('button[type="submit"]');
+      buttons.forEach(button => { button.disabled = true; });
+      try {
+        const file = admin ? el('meeting-pdf').files?.[0] || pendingStartFile : null;
+        if (directoryEndpoint && entryMode === 'create' && !file) throw new Error('새 회의에 사용할 PDF를 선택해주세요.');
+        await join(room, key, file, Boolean(directoryEndpoint) && entryMode === 'create');
+        el('meeting-pdf').value = '';
+        pendingStartFile = null;
+        dialog.close();
+      } catch (error) { el('meeting-error').textContent = error.message; }
+      finally { buttons.forEach(button => { button.disabled = false; }); }
+    };
+    el('meeting-message-open').onclick = () => {
+      if (!session.active || session.role !== 'admin') return;
+      if (dialog.open) dialog.close();
+      if (!composeDialog.open) composeDialog.showModal();
+      messageText.focus?.();
+    };
+    el('meeting-compose-close').onclick = () => composeDialog.close();
+    let preparedFile = null, uploadedAttachment = null, previewUrl = null, selectionRevision = 0, preparing = false;
+    const attachmentInfo = el('meeting-attachment-info');
+    const attachmentPreview = el('meeting-attachment-preview');
+    const attachmentInput = el('meeting-attachment-file');
+    const captureInput = el('meeting-attachment-capture');
+    const attachmentRemove = el('meeting-attachment-remove');
+    resetAttachment = () => {
+      selectionRevision++; preparing = false; preparedFile = uploadedAttachment = null;
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      previewUrl = null; attachmentPreview.hidden = true; attachmentPreview.removeAttribute?.('src');
+      attachmentRemove.hidden = true; attachmentInput.value = captureInput.value = '';
+      attachmentInfo.textContent = '한 번에 1개 · PDF 최대 50MB · 사진은 전송 전에 용량을 줄입니다.';
+    };
+    const sizeLabel = size => size < 1000000 ? `${Math.ceil(size / 1000)}KB` : `${(size / 1000000).toFixed(1)}MB`;
+    const selectAttachment = async files => {
+      if (el('meeting-message-send').disabled) return;
+      resetAttachment();
+      if (!files?.length) return;
+      if (files.length !== 1) { attachmentInfo.textContent = '한 번에 파일 1개를 선택해주세요.'; return; }
+      const selection = selectionRevision;
+      preparing = true; attachmentInfo.textContent = '첨부를 준비하는 중…';
+      try {
+        const result = await root.MessageMedia.prepareMessageFile(files[0]);
+        if (selection !== selectionRevision) return;
+        preparedFile = result.file;
+        attachmentInfo.textContent = `${preparedFile.name} · ${sizeLabel(result.originalSize)} → ${sizeLabel(preparedFile.size)}`;
+        attachmentRemove.hidden = false;
+        if (preparedFile.type.startsWith('image/')) {
+          previewUrl = URL.createObjectURL(preparedFile); attachmentPreview.src = previewUrl; attachmentPreview.hidden = false;
+        }
+      } catch (error) { if (selection === selectionRevision) attachmentInfo.textContent = error.message; }
+      finally { if (selection === selectionRevision) preparing = false; }
+    };
+    attachmentInput.onchange = () => selectAttachment(Array.from(attachmentInput.files || []));
+    captureInput.onchange = () => selectAttachment(Array.from(captureInput.files || []));
+    el('meeting-attachment-choose').onclick = () => attachmentInput.click();
+    el('meeting-attachment-camera').onclick = () => captureInput.click();
+    attachmentRemove.onclick = () => { if (!el('meeting-message-send').disabled) resetAttachment(); };
+    const dropZone = el('meeting-attachment-drop');
+    dropZone.ondragover = event => { event.preventDefault(); dropZone.dataset.dragging = 'true'; };
+    dropZone.ondragleave = () => { dropZone.dataset.dragging = 'false'; };
+    dropZone.ondrop = event => { event.preventDefault(); dropZone.dataset.dragging = 'false'; return selectAttachment(Array.from(event.dataTransfer?.files || [])); };
+    messageForm.onsubmit = async event => {
+      event.preventDefault();
+      const button = el('meeting-message-send');
+      if (button.disabled) return;
+      if (preparing) { messageFeedback.textContent = '첨부 준비가 끝난 뒤 전송해주세요.'; return; }
+      if (!messageText.value.trim() && !preparedFile) { messageFeedback.textContent = '메시지를 입력하거나 이미지·PDF를 첨부해주세요.'; return; }
+      const generation = session.generation;
+      button.disabled = true;
+      messageFeedback.dataset.state = 'sending';
+      messageFeedback.textContent = '메시지 전송 중…';
+      try {
+        if (preparedFile && !uploadedAttachment) {
+          const result = await uploadPdfParts({ room: session.room, key: session.key, file: preparedFile, purpose: 'message',
+            endpoint: new URL(root.DASHBOARD_CONFIG?.meetingDocumentEndpoint || '/.netlify/functions/meeting-document', location.href),
+            onProgress: text => { if (generation === session.generation) messageFeedback.textContent = text; } });
+          if (generation !== session.generation) return;
+          uploadedAttachment = result.document;
+        }
+        const message = await session.sendMessage(messageText.value, uploadedAttachment);
+        if (!message) return;
+        messageText.value = '';
+        resetAttachment();
+        messageFeedback.dataset.state = 'sent';
+        messageFeedback.textContent = '전체 참여자에게 메시지를 전송했습니다.';
+      } catch (error) {
+        if (generation !== session.generation) return;
+        messageFeedback.dataset.state = 'error';
+        messageFeedback.textContent = error.message;
+      } finally { button.disabled = false; }
+    };
+    messageDialog.addEventListener('cancel', event => event.preventDefault());
+    el('meeting-message-close').onclick = () => session.dismissMessage();
+    el('meeting-leave').onclick = () => {
+      session.leave();
+      const url = new URL(location.href);
+      url.searchParams.delete('room');
+      history.replaceState(null, '', url);
+      el('meeting-link').value = '';
+      dialog.close();
+    };
+    el('meeting-copy').onclick = async () => {
+      const input = el('meeting-link');
+      if (!input.value) { el('meeting-error').textContent = '회의에 연결한 뒤 주소를 복사해주세요.'; return; }
+      try { await navigator.clipboard.writeText(input.value); el('meeting-error').textContent = '이용자 접속 주소를 복사했습니다.'; }
+      catch { input.focus(); input.select(); el('meeting-error').textContent = '선택된 주소를 복사해주세요.'; }
+    };
+    root.addEventListener('dashboard-navigation', event => session.navigate(event.detail));
+    root.addEventListener('resize', () => { if (messageDialog.open) root.MessageMedia?.positionMessageDialog(messageDialog); });
+    root.addEventListener('dashboard-document-ready', () => {
+      const shell = el('dashboard-shell');
+      shell.dataset.starting = 'false';
+      shell.inert = false;
+      shell.ariaHidden = 'false';
+      // A newly opened local document must not suppress the next admin move.
+      if (session.active && session.role === 'viewer') session.browsing = true;
+      if (session.active && session.role === 'viewer') session.applyPending();
+    });
+    root.MeetingFiles = {
+      canNavigate: () => session.canNavigate(),
+      startWithFile(file) {
+        if (root.DashboardMeeting.getDocument().ready || session.active) return false;
+        openMeeting('admin', file, 'create');
+        return true;
+      },
+      isAdmin: () => session.active && session.role === 'admin',
+      async share(file) {
+        try { return await session.shareFile(file); }
+        catch (error) {
+          setRole('admin');
+          el('meeting-error').textContent = error.message;
+          if (!dialog.open) dialog.showModal();
+          throw error;
+        }
+      }
+    };
+    // Ably handles transport reconnection; only a restored page needs a catch-up
+    // read. No polling loop, heartbeat fetch, or visibility timer hits Netlify.
+    root.addEventListener('pagehide', () => {
+      if (session.stopSubscription) session.stopSubscription();
+      session.stopSubscription = null;
+    });
+    root.addEventListener('pageshow', event => {
+      if (event.persisted && session.active) join(session.room, session.key).catch(error => session.onStatus('error', error.message));
+    });
+    setRole('viewer');
+    session.onStatus('offline');
+    const room = new URL(location.href).searchParams.get('room');
+    if (room) join(room, '').catch(error => { session.onStatus('error', error.message); if (directoryEndpoint) openMeeting('viewer'); });
+
+  });
+})(typeof window === 'undefined' ? globalThis : window);

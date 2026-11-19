@@ -3,7 +3,9 @@
   "private": true,
   "scripts": {
     "build": "node scripts/build-netlify.cjs",
-    "test": "node --test tests/*.test.cjs"
+    "test": "node --test tests/*.test.cjs",
+    "build:lan": "node scripts/build-netlify.cjs lan",
+    "build:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-server-package.ps1"
   },
   "dependencies": {
     "@netlify/blobs": "^10.0.0",

@@ -1,7 +1,7 @@
 (function (root) {
   'use strict';
   const imageTypes = ['image/jpeg', 'image/png', 'image/webp'];
-  const hash = async (bytes, crypto) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), b => b.toString(16).padStart(2, '0')).join('');
+  const hash = async (bytes, crypto) => Array.from(new Uint8Array(await (root.DashboardHash ? root.DashboardHash.digest(bytes, crypto) : crypto.subtle.digest('SHA-256', bytes))), b => b.toString(16).padStart(2, '0')).join('');
 
   function popupGeometry(page, viewportWidth) {
     const width = Math.min(viewportWidth - 24, Math.max(280, page.width * .88));

@@ -20,3 +20,10 @@ netlify-deploy.zip
 node_modules/
 .netlify/
 
+
+server-package/
+server-vendor/
+server-data/
+runtime/
+DashboardServer.exe
+dashboard-server-windows*.zip

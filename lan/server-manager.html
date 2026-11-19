@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>예상질의 서버 관리</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#f1f5f9;color:#0f172a;font:15px/1.6 "Segoe UI",sans-serif}main{max-width:960px;margin:40px auto;padding:0 20px}h1{font-size:28px;margin-bottom:4px}h2{font-size:19px;margin-top:0}.subtitle{color:#64748b}.card{background:white;border:1px solid #cbd5e1;border-radius:14px;padding:24px;margin:20px 0}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}button,.button{font:inherit;background:#1e40af;color:white;border:0;border-radius:7px;padding:9px 15px;cursor:pointer;text-decoration:none;display:inline-block}button.secondary{background:#e2e8f0;color:#0f172a}button.danger{background:#b91c1c}button:disabled{opacity:.5;cursor:wait}input{font:inherit;padding:9px;border:1px solid #cbd5e1;border-radius:6px;max-width:100%}.address{font-family:monospace;overflow-wrap:anywhere;flex:1}#addresses .row{padding:10px 0;border-bottom:1px solid #e2e8f0}.key{margin-top:18px}.hint{font-size:13px;color:#64748b}.table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:12px 8px;border-bottom:1px solid #e2e8f0;overflow-wrap:anywhere}th{color:#64748b;font-size:13px}#feedback{min-height:25px}#feedback[data-error=true]{color:#b91c1c}[hidden]{display:none!important}@media(max-width:600px){main{margin:20px auto}.card{padding:16px}h1{font-size:24px}}
+  </style>
+  <script src="server-manager.js" defer></script>
+</head>
+<body><main>
+  <h1>예상질의 서버 관리</h1>
+  <p class="subtitle">서버 PC 전용 · 비밀번호 없이 이 PC에서만 관리할 수 있습니다.</p>
+  <p id="feedback" role="status" aria-live="polite">서버 상태를 확인하는 중…</p>
+  <div id="management" hidden>
+    <section class="card">
+      <div class="row"><h2>서버 실행 중</h2><a class="button" href="/">회의 화면 열기</a></div>
+      <p>참가자에게 아래 주소를 전달하세요. 참가자는 설치 없이 브라우저에서 접속합니다.</p>
+      <div id="addresses"></div>
+      <div class="key"><label for="admin-key">회의 개설·진행 담당자용 관리자 인증키</label>
+        <div class="row"><input id="admin-key" type="password" readonly autocomplete="off"><button id="copy-key" type="button" class="secondary">인증키 복사</button><label><input id="show-key" type="checkbox"> 표시</label></div>
+      </div>
+      <form id="change-key-form">
+        <label for="new-admin-key">새 관리자 인증키</label>
+        <div class="row"><input id="new-admin-key" type="password" autocomplete="new-password" minlength="6" maxlength="128" required placeholder="새 인증키 (6~128자)"><input id="confirm-admin-key" type="password" autocomplete="new-password" minlength="6" maxlength="128" required aria-label="새 인증키 확인" placeholder="새 인증키 확인"><button id="change-key" type="submit">인증키 변경</button></div>
+        <p class="hint">변경 즉시 적용됩니다. 기존 관리자는 새 키로 다시 연결해야 하며 참가자 연결은 유지됩니다. 재시작 후에도 새 키가 유지됩니다.</p>
+      </form>
+      <p class="hint">인증키는 회의 관리자에게만 전달하세요. 일반 참가자는 인증키가 필요 없습니다.</p>
+      <button id="firewall" type="button" class="secondary">다른 PC 접속 허용</button>
+      <p class="hint">다른 PC에서 연결되지 않을 때 누르세요. Windows 관리자 권한 확인이 나타날 수 있습니다. 공용 와이파이의 기기 간 통신 차단은 해제하지 않습니다.</p>
+    </section>
+    <section class="card"><div class="row"><h2>회의 목록</h2><button id="refresh" type="button" class="secondary">새로고침</button></div>
+      <p id="room-count"></p><div class="table-wrap"><table><thead><tr><th>회의 이름</th><th>상태</th><th>자료</th><th>관리</th></tr></thead><tbody id="rooms"></tbody></table></div>
+    </section>
+    <section class="card"><h2>서버 종료</h2><p>브라우저를 닫아도 서버는 계속 실행됩니다. 서버를 종료하려면 아래 버튼을 누르세요.</p>
+      <button id="shutdown" type="button" class="danger">서버 종료</button><p class="hint">종료하면 모든 회의의 연결이 끊깁니다. 자료는 보관되며 DashboardServer.exe를 다시 실행하면 복구됩니다.</p>
+    </section>
+  </div>
+</main></body></html>

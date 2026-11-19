@@ -18,7 +18,7 @@
   
   <!-- PDF.js & pdf-lib -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.9/pdf-lib.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 
   <!-- External Stylesheet -->
   <link rel="stylesheet" href="style.css?v=20261115-attachments">
@@ -178,6 +178,7 @@
         </button>
       </div>
       <p id="start-status" class="start-status" role="status" aria-live="polite">참여자는 별도의 PDF 파일이나 관리자 키가 필요하지 않습니다.</p>
+      <button type="button" id="start-owner" class="start-owner" hidden>최상위 관리자 · 서버 관리</button>
     </div>
   </section>
 
@@ -261,7 +262,22 @@
       <dt>내 역할</dt><dd id="meeting-info-role"></dd>
     </dl>
     <p id="meeting-status" class="meeting-status" role="status" aria-live="polite">개별 열람</p>
-
+    <div class="meeting-actions">
+      <button type="button" id="meeting-owner" hidden>서버 관리 화면으로</button>
+    </div>
+    <section id="meeting-directory" hidden aria-label="회의 목록">
+      <div class="meeting-directory-tools">
+        <button type="button" id="meeting-list-refresh">목록 새로고침</button>
+      </div>
+      <form id="meeting-directory-login" hidden>
+        <label for="meeting-directory-key">관리자 인증키</label>
+        <input id="meeting-directory-key" type="password" autocomplete="off" placeholder="관리자 인증키">
+        <button type="submit">인증</button>
+        <button type="button" id="meeting-directory-logout" hidden>로그아웃</button>
+      </form>
+      <p id="meeting-directory-status" role="status" aria-live="polite"></p>
+      <div id="meeting-list"></div>
+    </section>
     <form id="meeting-form">
       <label for="meeting-room">회의 이름</label>
       <input id="meeting-room" name="room" maxlength="64" pattern="[a-zA-Z0-9가-힣ㄱ-ㅎㅏ-ㅣ _\-]{1,64}" required autocomplete="off" placeholder="예: 2026 행정사무감사">
@@ -330,6 +346,7 @@
     </footer>
   </dialog>
   <script src="dashboard-config.js?v=20261103-empty-start" defer></script>
+  <script src="sha256.js" defer></script>
   <script src="app.js?v=20261110-category-default" defer></script>
   <script src="message-media.js?v=20261115-attachments" defer></script>
   <script src="live-session.js?v=20261115-attachments" defer></script>

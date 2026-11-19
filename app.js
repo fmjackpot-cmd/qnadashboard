@@ -1867,8 +1867,8 @@ async function loadPdfBufferNow(buffer, fileName, hosted = false, documentType =
   currentQuestion = null;
 
   try {
-    if (window.crypto?.subtle) {
-      const hash = await window.crypto.subtle.digest('SHA-256', currentPdfBytes);
+    if (window.DashboardHash || window.crypto?.subtle) {
+      const hash = await (window.DashboardHash ? window.DashboardHash.digest(currentPdfBytes) : window.crypto.subtle.digest('SHA-256', currentPdfBytes));
       meetingDocument.id = Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('');
     }
     const uint8 = new Uint8Array(buffer);
@@ -2254,7 +2254,7 @@ async function loadSharedPdf(descriptor) {
     let offset = 0;
     for (const chunk of chunks) { merged.set(chunk, offset); offset += chunk.length; }
     const bytes = merged.buffer;
-    const hash = await window.crypto.subtle.digest('SHA-256', bytes);
+    const hash = await (window.DashboardHash ? window.DashboardHash.digest(bytes) : window.crypto.subtle.digest('SHA-256', bytes));
     const id = Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('');
     if (id !== descriptor.id) throw new Error('회의 PDF 검증에 실패했습니다. 관리자가 자료를 다시 전송해주세요.');
     if (revision !== documentLoadRevision) throw new Error('다른 자료를 불러오는 중입니다. 다시 시도해주세요.');
