@@ -41,7 +41,7 @@ export async function cleanupDocuments({ documents, meetings, room, now = Date.n
   }
 }
 
-export function createDocumentHandler({ documents, meetings, adminKey, now = Date.now, createId = randomUUID }) {
+export function createDocumentHandler({ documents, meetings, adminKey, now = Date.now, createId = randomUUID, revalidateDownloads = false }) {
   return async request => {
     const url = new URL(request.url);
     const room = url.searchParams.get('room') || '';
@@ -49,6 +49,7 @@ export function createDocumentHandler({ documents, meetings, adminKey, now = Dat
     if (!['GET', 'POST'].includes(request.method)) return json({ error: '허용되지 않은 요청입니다.' }, 405);
     try {
       if (request.method === 'GET') {
+        if ((await meetings?.get(room, { type: 'json', consistency: 'strong' }))?.closed) return json({ error: '종료된 회의입니다. 새 회의 이름으로 개설해주세요.', closed: true }, 410);
         const fileId = url.searchParams.get('file');
         if (!validFileId(fileId)) return json({ error: '자료를 찾을 수 없습니다.' }, 404);
         const entry = await documents.getWithMetadata(fileId, { type: 'arrayBuffer', consistency: 'strong' });
@@ -58,15 +59,16 @@ export function createDocumentHandler({ documents, meetings, adminKey, now = Dat
           if (!url.searchParams.has('part') || !Number.isInteger(part) || part < 0 || part >= entry.metadata.parts) return json({ error: '조각 번호가 올바르지 않습니다.' }, 400);
           const chunk = await documents.getWithMetadata(`${fileId}/part/${part}`, { type: 'arrayBuffer', consistency: 'strong' });
           if (!chunk || chunk.metadata.room !== room) return json({ error: '자료 조각을 찾을 수 없습니다.' }, 404);
-          return new Response(chunk.data, { headers: { 'Content-Type': 'application/octet-stream', 'Cache-Control': pdfCache, 'X-Content-Type-Options': 'nosniff' } });
+          return new Response(chunk.data, { headers: { 'Content-Type': 'application/octet-stream', 'Cache-Control': revalidateDownloads ? 'no-store' : pdfCache, 'X-Content-Type-Options': 'nosniff' } });
         }
-        return new Response(entry.data, { headers: { 'Content-Type': entry.metadata.mediaType || 'application/pdf', 'Cache-Control': pdfCache,
+        return new Response(entry.data, { headers: { 'Content-Type': entry.metadata.mediaType || 'application/pdf', 'Cache-Control': revalidateDownloads ? 'no-store' : pdfCache,
           'X-Content-Type-Options': 'nosniff', 'Content-Disposition': `inline; filename="attachment"; filename*=UTF-8''${encodeURIComponent(entry.metadata.name)}` } });
       }
       if (!adminKey || adminKey.length < 6) return json({ error: '서버의 관리자 인증키를 설정해주세요.' }, 503);
       if (!timingSafeEqual(digest(request.headers.get('authorization') || ''), digest(`Bearer ${adminKey}`))) return json({ error: '관리자 인증키를 확인해주세요.' }, 401);
       const origin = request.headers.get('origin');
       if (origin && origin !== url.origin) return json({ error: '다른 사이트에서 업로드할 수 없습니다.' }, 403);
+      if ((await meetings?.get(room, { type: 'json', consistency: 'strong' }))?.closed) return json({ error: '종료된 회의입니다. 새 회의 이름으로 개설해주세요.', closed: true }, 410);
       if (Number(request.headers.get('content-length')) > MAX_PDF_BYTES) return json({ error: 'PDF는 4.5MB 이하만 업로드할 수 있습니다.' }, 413);
       const bytes = await request.arrayBuffer();
       if (bytes.byteLength > MAX_PDF_BYTES) return json({ error: 'PDF는 4.5MB 이하만 업로드할 수 있습니다.' }, 413);

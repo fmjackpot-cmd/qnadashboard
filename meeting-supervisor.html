@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>회의 관리</title>
+  <link rel="stylesheet" href="meeting-supervisor.css">
+  <script src="meeting-supervisor.js" defer></script>
+</head>
+<body>
+  <main>
+    <a href="./">대시보드로 돌아가기</a>
+    <h1>회의 관리</h1>
+    <form id="login" hidden>
+      <label for="password">슈퍼바이저 암호</label>
+      <input id="password" type="password" autocomplete="current-password" required>
+      <button>로그인</button>
+    </form>
+    <section id="management" hidden aria-label="열려 있는 회의">
+      <div class="actions"><button id="refresh">새로고침</button><button id="logout">로그아웃</button></div>
+      <h2>열려 있는 회의</h2>
+      <ul id="meetings"></ul>
+    </section>
+    <p id="feedback" role="status" aria-live="polite"></p>
+  </main>
+</body>
+</html>

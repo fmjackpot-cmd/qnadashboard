@@ -74,6 +74,7 @@
           onConnection: (connected, state) => {
             if (generation !== this.generation) return;
             this.connectionLost = !connected;
+            if (state === 'failed') this.sync();
             if (!connected) this.onStatus('error', state === 'failed'
               ? '실시간 연결에 실패했습니다. 회의 연결에서 다시 접속해주세요.'
               : '실시간 연결이 끊겼습니다. 자동으로 다시 연결하는 중입니다.');
@@ -134,13 +135,21 @@
         this.connectionLost = false;
       } catch (error) {
         if (generation === this.generation) {
+          if (error.closed) { this.endClosedMeeting(); return; }
           this.connectionLost = true;
           this.onStatus('error', error.message);
         }
       }
     }
 
+    endClosedMeeting() {
+      if (!this.active) return;
+      this.leave();
+      this.onStatus('closed', '슈퍼바이저가 회의를 종료했습니다.');
+    }
+
     receive(state) {
+      if (state?.type === 'closed') { this.endClosedMeeting(); return Promise.resolve(); }
       if (state?.type === 'message') { this.receiveMessage(state.message); return Promise.resolve(); }
       if (!this.active || !state ||
           !Number.isSafeInteger(state.sequence) || state.sequence < 1 ||
@@ -268,6 +277,7 @@
           this.onStatus(this.canNavigate(false) ? 'admin' : 'cooldown');
         } catch (error) {
           if (generation === this.generation) {
+            if (error.closed) { this.endClosedMeeting(); return; }
             if (error.state) { await this.receive(error.state); await this.returnToAdmin(); }
             this.onStatus('error', `${error.message} ‘현재 화면 전송’으로 다시 시도해주세요.`);
           }
@@ -300,6 +310,7 @@
         this.onStatus('admin');
         return state;
       } catch (error) {
+        if (generation === this.generation && error.closed) { this.endClosedMeeting(); throw error; }
         if (generation === this.generation && error.state) { await this.receive(error.state); await this.returnToAdmin(); }
         if (generation === this.generation) this.onStatus('error', error.message);
         throw error;
@@ -412,6 +423,7 @@
       if (!response.ok) {
         const error = new Error(result.error || '회의 서버 연결에 실패했습니다.');
         error.state = result.state;
+        error.closed = result.closed === true;
         throw error;
       }
       return result;
@@ -461,6 +473,18 @@
         status.dataset.state = kind;
         el('meeting-message-open').hidden = !session?.active || session.role !== 'admin';
         messageForm.hidden = !session?.active || session.role !== 'admin';
+        if (kind === 'closed') {
+          const url = new URL(location.href);
+          url.searchParams.delete('room');
+          history.replaceState(null, '', url);
+          el('meeting-link').value = '';
+          el('upload-overlay').style.display = 'flex';
+          const shell = el('dashboard-shell');
+          shell.dataset.starting = 'true';
+          shell.inert = true;
+          shell.ariaHidden = 'true';
+          if (dialog.open) dialog.close();
+        }
         if (kind === 'offline') {
           resetAttachment();
           messageText.value = ''; messageFeedback.textContent = '';
@@ -645,6 +669,7 @@
         messageFeedback.textContent = '전체 참여자에게 메시지를 전송했습니다.';
       } catch (error) {
         if (generation !== session.generation) return;
+        if (error.closed) { session.endClosedMeeting(); return; }
         messageFeedback.dataset.state = 'error';
         messageFeedback.textContent = error.message;
       } finally { button.disabled = false; }

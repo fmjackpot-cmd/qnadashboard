@@ -13,8 +13,8 @@ const json = (data, status = 200) => new Response(JSON.stringify(data), {
   headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }
 });
 const digest = value => createHash('sha256').update(value).digest();
-const roomPattern = /^[a-zA-Z0-9가-힣ㄱ-ㅎㅏ-ㅣ _-]{1,64}$/;
-const maxAge = 12 * 60 * 60 * 1000;
+export const roomPattern = /^[a-zA-Z0-9가-힣ㄱ-ㅎㅏ-ㅣ _-]{1,64}$/;
+export const maxAge = 12 * 60 * 60 * 1000;
 
 // Dependencies are injectable so authorization and persistence can be checked locally.
 export function createHandler({ store, documents, adminKey, broker, now = Date.now, revision = randomUUID }) {
@@ -27,11 +27,15 @@ export function createHandler({ store, documents, adminKey, broker, now = Date.n
     if (!roomPattern.test(room)) return json({ error: '회의 이름은 한글·영문·숫자·공백·밑줄·하이픈 1~64자로 입력해주세요.' }, 400);
     try {
       if (request.method === 'GET') {
-        if (url.searchParams.get('action') === 'token') return json(await broker.issueToken(room));
+        if (url.searchParams.get('action') === 'token') {
+          if ((await store.get(room, { type: 'json', consistency: 'strong' }))?.closed) return json({ error: '종료된 회의입니다. 새 회의 이름으로 개설해주세요.', closed: true }, 410);
+          return json(await broker.issueToken(room));
+        }
         const [state, messages] = await Promise.all([
           store.get(room, { type: 'json', consistency: 'strong' }),
           store.get(`messages:${room}`, { type: 'json', consistency: 'strong' })
         ]);
+        if (state?.closed) return json({ error: '종료된 회의입니다. 새 회의 이름으로 개설해주세요.', closed: true }, 410);
         return json({ state: state && now() - state.updatedAt < maxAge ? state : null,
           messages: (messages || []).filter(message => now() - message.sentAt < maxAge) });
       }
@@ -45,6 +49,7 @@ export function createHandler({ store, documents, adminKey, broker, now = Date.n
       let body;
       try { body = JSON.parse(bodyText); } catch { return json({ error: '올바른 JSON 요청이 아닙니다.' }, bodyText.length > 2048 ? 413 : 400); }
       if (body?.action !== 'send-message' && bodyText.length > 2048) return json({ error: '요청이 너무 큽니다.' }, 413);
+      if (['authenticate', 'send-message'].includes(body?.action) && (await store.get(room, { type: 'json', consistency: 'strong' }))?.closed) return json({ error: '종료된 회의입니다. 새 회의 이름으로 개설해주세요.', closed: true }, 410);
       if (body?.action === 'authenticate') return json({ authenticated: true });
       if (body?.action === 'send-message') {
         if (typeof body.text !== 'string' || body.text.length > 1000 || (!body.text.trim() && !body.attachmentId)) {
@@ -82,6 +87,7 @@ export function createHandler({ store, documents, adminKey, broker, now = Date.n
       const snapshot = store.getWithMetadata
         ? await store.getWithMetadata(room, { type: 'json', consistency: 'strong' }) : null;
       const previous = store.getWithMetadata ? snapshot?.data : await store.get(room, { type: 'json', consistency: 'strong' });
+      if (previous?.closed) return json({ error: '종료된 회의입니다. 새 회의 이름으로 개설해주세요.', closed: true }, 410);
       if (previous?.controllerId && previous.controllerId !== body.controllerId && now() - previous.updatedAt < 2000) {
         return json({ error: '다른 관리자가 화면을 변경했습니다. 변경 후 2초가 지나면 다시 선택해주세요.', state: previous }, 409);
       }
@@ -105,8 +111,9 @@ export function createHandler({ store, documents, adminKey, broker, now = Date.n
       const written = await store.setJSON(room, state, store.getWithMetadata
         ? (snapshot ? { onlyIfMatch: snapshot.etag } : { onlyIfNew: true }) : undefined);
       if (written?.modified === false) {
-        return json({ error: '다른 관리자가 먼저 화면을 변경했습니다. 최신 화면을 확인하고 다시 선택해주세요.',
-          state: await store.get(room, { type: 'json', consistency: 'strong' }) }, 409);
+        const latest = await store.get(room, { type: 'json', consistency: 'strong' });
+        if (latest?.closed) return json({ error: '종료된 회의입니다. 새 회의 이름으로 개설해주세요.', closed: true }, 410);
+        return json({ error: '다른 관리자가 먼저 화면을 변경했습니다. 최신 화면을 확인하고 다시 선택해주세요.', state: latest }, 409);
       }
       await broker.publish(room, state);
       return json({ state });

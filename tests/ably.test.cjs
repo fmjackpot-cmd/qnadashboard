@@ -95,7 +95,7 @@ test('token endpoint needs no admin credential and a broker failure is never rep
   });
   const token = await handler(new Request('https://test.example/?room=room&action=token'));
   assert.equal(token.status, 200);
-  assert.equal(reads, 0, 'token refresh must not read meeting state');
+  assert.equal(reads, 1, 'token requests must check whether the room was closed');
   const fail = await handler(new Request('https://test.example/?room=room', {
     method: 'POST', headers: { Authorization: `Bearer ${adminKey}` }, body: JSON.stringify(state(1))
   }));

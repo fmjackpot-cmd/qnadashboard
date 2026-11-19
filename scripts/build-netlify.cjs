@@ -27,6 +27,14 @@ if (lan) {
     fs.copyFileSync(path.join(lanRoot, asset), path.join(out, asset));
   }
 }
+if (!lan) {
+  const link = '<a href="meeting-supervisor.html">회의 관리</a>';
+  html = html.replace('<!-- web-supervisor-start -->', link)
+    .replace('<!-- web-supervisor-info -->', '<a href="meeting-supervisor.html" target="_blank" rel="noopener">회의 관리</a>');
+  for (const asset of ['meeting-supervisor.html', 'meeting-supervisor.js', 'meeting-supervisor.css']) {
+    fs.copyFileSync(path.join(root, asset), path.join(out, asset));
+  }
+}
 fs.writeFileSync(path.join(out, 'index.html'), html);
 fs.writeFileSync(path.join(out, 'dashboard-config.js'), `window.DASHBOARD_CONFIG = ${JSON.stringify({
   meetingEndpoint: '/.netlify/functions/meeting', meetingDocumentEndpoint: '/.netlify/functions/meeting-document', ...(!lan && { meetingSdk: './vendor/ably.min.js' })
