@@ -76,7 +76,17 @@ test('messages reach all participants, remain during navigation, queue in order,
   assert.equal(refreshed.session.messages.length, 0, 'dismissals survive a refresh in the same browser');
   const late = f.client();
   await late.session.join('room');
-  assert.equal(late.session.messages.length, 2, 'a new participant receives retained messages');
+  assert.equal(late.session.messages.length, 0, 'a new participant does not receive messages sent before entry');
+  await late.session.sync();
+  assert.equal(late.session.messages.length, 0, 'later snapshot reads do not replay the entry baseline');
+  await admin.session.sendMessage('입장 후 새 메시지');
+  assert.equal(late.displayed.at(-1).text, '입장 후 새 메시지');
+  late.session.leave();
+  await admin.session.sendMessage('퇴장 중 메시지');
+  await late.session.join('room');
+  assert.equal(late.session.messages.length, 0, 'rejoining does not replay messages from before re-entry');
+  await admin.session.sendMessage('재입장 후 메시지');
+  assert.equal(late.displayed.at(-1).text, '재입장 후 메시지');
   assert.equal(f.records.get('room').sequence, 1, 'message writes do not change navigation or its lock');
   for (const c of [admin, one, two, otherRoom, refreshed, late]) c.session.leave();
 });
@@ -96,6 +106,24 @@ test('missed messages arrive on reconnect and closing still works when local sto
   await viewer.session.join('other');
   assert.equal(viewer.displayed.at(-1), null);
   admin.session.leave(); viewer.session.leave();
+});
+
+test('a live message received during the initial snapshot stays visible while older messages are suppressed', async () => {
+  const f = await fixture();
+  const old = { id: 'old', text: '입장 전', sentAt: Date.now() };
+  const live = { id: 'live', text: '입장 중 도착', sentAt: Date.now() };
+  const viewer = f.client({
+    request: async () => ({ messages: [old, live], state: null }),
+    subscribe: async (_, callbacks) => {
+      callbacks.onState({ type: 'message', message: live });
+      return () => {};
+    }
+  });
+  await viewer.session.join('room');
+  assert.deepEqual(viewer.session.messages.map(message => message.id), ['live']);
+  await viewer.session.sync();
+  assert.deepEqual(viewer.session.messages.map(message => message.id), ['live']);
+  viewer.session.leave();
 });
 
 test('only authorized same-origin admins can send nonempty messages of at most 1,000 characters', async () => {

@@ -166,14 +166,14 @@
       <div class="start-options">
         <button type="button" class="start-option start-option-admin" id="start-admin" aria-haspopup="dialog" aria-controls="meeting-dialog">
           <span class="start-option-icon"><i class="fa-solid fa-user-shield" aria-hidden="true"></i></span>
-          <strong>관리자로 시작하기</strong>
-          <span>PDF를 업로드하고<br>회의 화면을 진행합니다.</span>
+          <strong>회의 개설하기</strong>
+          <span>회의 이름과 PDF로<br>새 회의를 개설합니다.</span>
           <span class="start-option-link">회의 개설 <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></span>
         </button>
         <button type="button" class="start-option" id="start-viewer" aria-haspopup="dialog" aria-controls="meeting-dialog">
           <span class="start-option-icon"><i class="fa-solid fa-users" aria-hidden="true"></i></span>
           <strong>회의 참여하기</strong>
-          <span>회의 코드를 입력하면<br>자료가 자동으로 열립니다.</span>
+          <span>회의 이름을 입력하면<br>자료가 자동으로 열립니다.</span>
           <span class="start-option-link">회의 입장 <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></span>
         </button>
       </div>
@@ -250,24 +250,26 @@
       <h2 id="meeting-heading">실시간 회의 연결</h2>
       <button type="button" id="meeting-close" aria-label="회의 설정 닫기">닫기</button>
     </div>
-    <p>각자 문항을 열람하다가도 관리자가 이동하면 해당 문항이 우선 표시됩니다. 확대와 스크롤은 각자 조절합니다.</p>
-    <div class="meeting-role-switch" role="group" aria-label="회의 역할 선택">
-      <button type="button" id="meeting-role-admin" aria-pressed="false">관리자</button>
-      <button type="button" id="meeting-role-viewer" aria-pressed="true">참여자</button>
+    <p id="meeting-intro">각자 문항을 열람하다가도 관리자가 이동하면 해당 문항이 우선 표시됩니다. 확대와 스크롤은 각자 조절합니다.</p>
+    <div id="meeting-role-switch" class="meeting-role-switch" role="group" aria-label="회의 역할 선택">
+      <button type="button" id="meeting-role-admin" aria-pressed="false">관리자로 참여</button>
+      <button type="button" id="meeting-role-viewer" aria-pressed="true">참여자로 참여</button>
     </div>
+    <dl id="meeting-info" class="meeting-info" hidden>
+      <dt>회의 이름</dt><dd id="meeting-info-room"></dd>
+      <dt>자료</dt><dd id="meeting-info-document"></dd>
+      <dt>내 역할</dt><dd id="meeting-info-role"></dd>
+    </dl>
     <p id="meeting-status" class="meeting-status" role="status" aria-live="polite">개별 열람</p>
-    <div class="meeting-actions">
-      <button type="button" id="meeting-return" hidden>관리자 화면으로</button>
-      <button type="button" id="meeting-send" hidden>현재 화면 전송</button>
-      <button type="button" id="meeting-message-settings" hidden aria-haspopup="dialog" aria-controls="meeting-compose-dialog">메시지 보내기</button>
-    </div>
+
     <form id="meeting-form">
-      <label for="meeting-room">회의 코드</label>
-      <input id="meeting-room" name="room" maxlength="64" pattern="[a-zA-Z0-9_\-]{1,64}" required autocomplete="off" placeholder="cbe">
+      <label for="meeting-room">회의 이름</label>
+      <input id="meeting-room" name="room" maxlength="64" pattern="[a-zA-Z0-9가-힣ㄱ-ㅎㅏ-ㅣ _\-]{1,64}" required autocomplete="off" placeholder="예: 2026 행정사무감사">
       <button type="submit" id="meeting-viewer">회의 참여하기</button>
       <fieldset id="meeting-admin-fields" hidden disabled>
       <label for="meeting-key">관리자 인증키</label>
       <input id="meeting-key" type="password" autocomplete="off" placeholder="서버에 설정한 관리자 인증키 (6자 이상)">
+      <div id="meeting-upload-fields">
       <fieldset class="document-type-options">
         <legend>자료구분</legend>
         <label><input id="meeting-type-questions" type="radio" name="documentType" value="questions" checked> 예상질의·답변서</label>
@@ -275,7 +277,8 @@
       </fieldset>
       <label for="meeting-pdf">회의 PDF <small>관리자만 선택 · 최대 50MB</small></label>
       <input id="meeting-pdf" type="file" accept="application/pdf,.pdf">
-      <p class="meeting-pdf-hint" id="meeting-pdf-hint">첫 관리자는 PDF를 선택하세요. 추가 관리자는 같은 회의 코드와 인증키를 입력하면 기존 자료로 접속합니다.</p>
+      <p class="meeting-pdf-hint" id="meeting-pdf-hint">첫 관리자는 PDF를 선택하세요. 추가 관리자는 같은 회의 이름과 인증키를 입력하면 기존 자료로 접속합니다.</p>
+      </div>
       <button type="submit" id="meeting-admin">관리자로 연결 · 선택한 PDF 업로드</button>
       </fieldset>
     </form>
@@ -287,7 +290,7 @@
     </div>
     </div>
     <p id="meeting-error" role="status" aria-live="polite"></p>
-    <button type="button" id="meeting-leave" hidden>회의 연결 해제</button>
+    <button type="button" id="meeting-leave" hidden>회의 나가기</button>
   </dialog>
   <dialog id="meeting-compose-dialog" class="meeting-dialog" aria-labelledby="meeting-compose-heading">
     <div class="meeting-dialog-heading">

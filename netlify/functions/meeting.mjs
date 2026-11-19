@@ -13,7 +13,7 @@ const json = (data, status = 200) => new Response(JSON.stringify(data), {
   headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }
 });
 const digest = value => createHash('sha256').update(value).digest();
-const roomPattern = /^[a-zA-Z0-9_-]{1,64}$/;
+const roomPattern = /^[a-zA-Z0-9가-힣ㄱ-ㅎㅏ-ㅣ _-]{1,64}$/;
 const maxAge = 12 * 60 * 60 * 1000;
 
 // Dependencies are injectable so authorization and persistence can be checked locally.
@@ -24,7 +24,7 @@ export function createHandler({ store, documents, adminKey, broker, now = Date.n
     if (!broker) return json({ error: '서버에 ABLY_API_KEY를 설정하고 다시 배포해주세요.' }, 503);
     const url = new URL(request.url);
     const room = url.searchParams.get('room') || '';
-    if (!roomPattern.test(room)) return json({ error: '회의 코드는 영문·숫자·밑줄·하이픈 1~64자로 입력해주세요.' }, 400);
+    if (!roomPattern.test(room)) return json({ error: '회의 이름은 한글·영문·숫자·공백·밑줄·하이픈 1~64자로 입력해주세요.' }, 400);
     try {
       if (request.method === 'GET') {
         if (url.searchParams.get('action') === 'token') return json(await broker.issueToken(room));
@@ -86,7 +86,8 @@ export function createHandler({ store, documents, adminKey, broker, now = Date.n
         return json({ error: '다른 관리자가 화면을 변경했습니다. 변경 후 2초가 지나면 다시 선택해주세요.', state: previous }, 409);
       }
       let document = previous?.document;
-      if (body.action === 'set-document') {
+      if (body.action === 'create-document' && previous) return json({ error: '이미 개설된 회의 이름입니다. 다른 이름으로 개설하거나 관리자로 참여해주세요.' }, 409);
+      if (['set-document', 'create-document'].includes(body.action)) {
         if (!documents || !validFileId(body.fileId)) return json({ error: '먼저 회의 자료를 업로드해주세요.' }, 400);
         const entry = await documents.getMetadata(body.fileId, { consistency: 'strong' });
         if (!entry || entry.metadata.room !== room || entry.metadata.id !== body.documentId || entry.metadata.purpose === 'message') return json({ error: '업로드한 회의 자료가 일치하지 않습니다.' }, 400);

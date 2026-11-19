@@ -136,6 +136,8 @@ test('image and 5MB PDF messages use verified attachments without replacing the 
   const viewer = new MeetingSession({ request: f.request, subscribe: f.subscribe, getDocument: () => ({ ready: true }),
     showTarget: async () => {}, onMessage: message => shown.push(message) });
   await viewer.join('room');
+  assert.equal(shown.at(-1), null, 'old attachment messages are suppressed on entry');
+  for (const previous of lateMessages) await f.request('room', { action: 'send-message', text: '', attachmentId: previous.attachment.fileId }, adminKey);
   assert.equal(shown.at(-1).attachment.mediaType, 'image/png');
   viewer.dismissMessage();
   assert.equal(shown.at(-1).attachment.mediaType, 'application/pdf');
@@ -385,4 +387,21 @@ test('oversize files and concurrent file changes are rejected before replacing t
   await assert.rejects(admin.shareFile(pdf('two')), /처리하는 중/);
   release();
   await first;
+});
+
+
+test('Korean room names upload and retrieve their PDF; creation cannot overwrite an existing room', async () => {
+  const f = await fixture();
+  const room = '2026 행정사무감사';
+  const source = pdf('한글 회의 자료');
+  const document = (await f.uploadFile(room, source, adminKey)).document;
+  const create = { action: 'create-document', fileId: document.fileId, documentId: document.id, mode: 'toc' };
+  const opened = await f.request(room, create, adminKey);
+  assert.equal(opened.state.document.name, source.name);
+  const response = await f.fileHandler(new Request(new URL(document.url, 'https://dashboard.test')));
+  assert.equal(response.status, 200);
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), Buffer.from(await source.arrayBuffer()));
+  assert.equal((await f.request(room)).state.documentId, document.id);
+  await assert.rejects(f.request(room, create, adminKey), /이미 개설/);
+  assert.equal((await f.request('legacy-room_2026')).state, null);
 });

@@ -45,7 +45,7 @@ export function createDocumentHandler({ documents, meetings, adminKey, now = Dat
   return async request => {
     const url = new URL(request.url);
     const room = url.searchParams.get('room') || '';
-    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(room)) return json({ error: '회의 코드가 올바르지 않습니다.' }, 400);
+    if (!/^[a-zA-Z0-9가-힣ㄱ-ㅎㅏ-ㅣ _-]{1,64}$/.test(room)) return json({ error: '회의 코드가 올바르지 않습니다.' }, 400);
     if (!['GET', 'POST'].includes(request.method)) return json({ error: '허용되지 않은 요청입니다.' }, 405);
     try {
       if (request.method === 'GET') {

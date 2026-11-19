@@ -32,7 +32,7 @@
 .meeting-actions { flex-wrap: wrap; }
 .meeting-dialog button { border: 1px solid #cbd5e1; border-radius: 7px; padding: 7px 10px; background: white; color: #1e293b; cursor: pointer; font-size: 12px; }
 .meeting-dialog button:hover { background: #dbeafe; }
-.meeting-dialog [hidden] { display: none; }
+.meeting-dialog [hidden] { display: none !important; }
 .meeting-dialog { margin: auto; width: min(480px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow-y: auto; border: 1px solid #cbd5e1; border-radius: 16px; padding: 24px; color: #1e293b; box-shadow: 0 20px 70px #0f172a55; }
 .meeting-dialog::backdrop { background: #0f172a88; }
 .meeting-dialog-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
@@ -1357,3 +1357,7 @@ aside.sidebar.mode-title-list {
 .receipt-department-filter label { display: block; margin-bottom: 5px; color: #475569; font-size: 0.76rem; font-weight: 600; }
 .receipt-department-filter select { width: 100%; padding: 7px 5px; border: 1px solid #cbd5e1; border-radius: 5px; background: white; color: #0f172a; font: inherit; font-size: 0.8rem; }
 .receipt-department-filter small { display: block; margin-top: 5px; color: #64748b; font-size: 0.7rem; }
+
+.meeting-info { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 10px 14px; margin: 20px 0; font-size: 14px; }
+.meeting-info dt { color: #64748b; }
+.meeting-info dd { margin: 0; overflow-wrap: anywhere; }

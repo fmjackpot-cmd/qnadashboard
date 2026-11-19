@@ -183,3 +183,23 @@ test('a failed subscription cleans up the SDK connection instead of falling back
   await assert.rejects(subscribe('room', { onState() {}, onReconnect() {}, onConnection() {} }), /permission denied/);
   assert.ok(closed && unsubscribed);
 });
+
+
+test('Korean room token capability and publications use the same channel without changing legacy channels', async () => {
+  const { createBroker } = await import('../netlify/lib/meeting-ably.mjs');
+  let capability, publishedChannel;
+  class RestClient {
+    constructor() {
+      this.auth = { createTokenRequest: async request => { capability = JSON.parse(request.capability); return {}; } };
+      this.channels = { get: name => ({ publish: async () => { publishedChannel = name; } }) };
+    }
+  }
+  const broker = createBroker({ apiKey: 'test-key', namespace: 'production', RestClient });
+  for (const room of ['2026 행정사무감사', 'legacy-room_2026']) {
+    const token = await broker.issueToken(room);
+    await broker.publish(room, state(1));
+    assert.equal(token.channel, 'dashboard:production:' + room);
+    assert.equal(publishedChannel, token.channel);
+    assert.deepEqual(capability[token.channel], ['subscribe']);
+  }
+});
