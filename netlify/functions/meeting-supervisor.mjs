@@ -23,7 +23,7 @@ export function createSupervisorHandler({ store, broker, key, scope = '', now = 
   const open = state => state?.document && !state.closed && now() - state.updatedAt < maxAge;
 
   return async request => {
-    if (!key || key.length < 16) return json({ error: '서버에 16자 이상의 MEETING_SUPERVISOR_KEY를 설정해주세요.' }, 503);
+    if (!key || key.length < 6) return json({ error: '서버에 6자 이상의 MEETING_SUPERVISOR_KEY를 설정해주세요.' }, 503);
     const url = new URL(request.url);
     const action = url.searchParams.get('action') || '';
     if (!['GET', 'POST'].includes(request.method)) return json({ error: '허용되지 않은 요청입니다.' }, 405);

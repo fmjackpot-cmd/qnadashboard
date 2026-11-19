@@ -25,7 +25,7 @@ test('supervisor lists current meetings and persists closure even when notificat
       return { modified: true };
     }
   };
-  const key = 'test-supervisor-key-do-not-use';
+  const key = 'test06';
   const supervisor = createSupervisorHandler({ store, key, now: () => now,
     broker: { publish: async (room, event) => { events.push({ room, event }); throw Error('temporarily offline'); } } });
   const url = 'https://site.example';

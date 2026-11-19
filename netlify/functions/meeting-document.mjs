@@ -8,7 +8,7 @@ export default async request => {
       documents: getStore({ name: `dashboard-documents-${namespace}`, consistency: 'strong' }),
       meetings: getStore({ name: `dashboard-meetings-${namespace}`, consistency: 'strong' }),
       adminKey: process.env.MEETING_ADMIN_KEY,
-      revalidateDownloads: (process.env.MEETING_SUPERVISOR_KEY?.length || 0) >= 16
+      revalidateDownloads: (process.env.MEETING_SUPERVISOR_KEY?.length || 0) >= 6
     })(request);
   } catch {
     return new Response(JSON.stringify({ error: '회의 자료 저장소 설정을 확인해주세요.' }), {
